@@ -1,0 +1,55 @@
+{
+  "led_body": [
+    [
+      0.15,
+      0.0,
+      0.0
+    ],
+    [
+      -0.15,
+      0.0,
+      0.0
+    ],
+    [
+      -0.043,
+      0.105,
+      0.02
+    ]
+  ],
+  "mass_kg": 0.5,
+  "setpoint": [
+    0,
+    0,
+    1
+  ],
+  "gains": {
+    "kp_xy": 6.0,
+    "kd_xy": 3.5,
+    "ki_xy": 1.2,
+    "kp_z": 0.6,
+    "kd_z": 0.25,
+    "ki_z": 0.4,
+    "kp_yaw": 1.5,
+    "hover_ff": 0.42,
+    "max_tilt_deg": 12.0,
+    "throttle_cap": 0.6,
+    "i_xy_limit": 3.0,
+    "i_z_limit": 0.15,
+    "sign_roll": 1.0,
+    "sign_pitch": 1.0,
+    "sign_yaw": 1.0
+  },
+  "filter": {
+    "alpha": 0.5,
+    "beta": 0.05,
+    "gate_m": 0.3
+  },
+  "control": {
+    "climb_rate": 0.4,
+    "loss_grace_s": 0.25,
+    "loss_ramp_s": 1.0,
+    "reject_rmsd_m": 0.015,
+    "send_hz": 100
+  },
+  "esp_ip": "192.168.4.1"
+}

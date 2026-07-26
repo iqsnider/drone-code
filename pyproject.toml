@@ -5,5 +5,12 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "matplotlib>=3.11.1",
+    "numpy>=2.5.1",
+    "opencv-python>=5.0.0.93",
+    "pseyepy",
     "pygame>=2.6.1",
 ]
+
+[tool.uv.sources]
+pseyepy = { git = "https://github.com/iqsnider/pseyepy" }
