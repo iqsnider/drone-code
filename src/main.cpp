@@ -1,39 +1,9 @@
 #include <Arduino.h>
-/*
- * ESP32 DevKitV1 -> iFlight SucceX-F722  (PlatformIO: src/main.cpp)
- *
- * ITERATION 1: open-loop teleop shakeout.
- *
- *     keyboard --UDP--> ESP32 SoftAP --MSP/UART--> FC --> motors
- *
- * Betaflight runs ANGLE mode and does the stabilizing; the arrow keys
- * command lean angles. The ESP32 is a WiFi-to-MSP bridge with a link
- * watchdog failsafe, and it polls MSP_STATUS_EX so the FC's own
- * arming-disable reason shows up in the teleop HUD.
- *
- * Core 0: fixed 100 Hz timer, emits MSP_SET_RAW_RC, polls status.
- * Core 1 (Arduino loop): WiFi + UDP receive + telemetry.
- *
- * WIRING  (both sides 3.3V -- no level shifting)
- *   GPIO17 (TX2) -> F722 RX4
- *   GPIO16 (RX2) <- F722 TX4
- *   GND          -- GND
- *   VIN (5V)     <- FC 5V BEC pad
- *   Do NOT power from USB and the BEC at once.
- *
- * BETAFLIGHT
- *   Ports    : Configuration/MSP ON for UART4, 115200
- *   Receiver : Receiver Mode = MSP RX
- *   Modes    : ARM on AUX1 1700-2100 ; ANGLE on AUX2 1700-2100
- *   Failsafe : stage 2 = Drop
- *   AIR_MODE : OFF
- */
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <esp_wifi.h>
-// ---------------------------------------------------------------------------
-// Configuration
-// ---------------------------------------------------------------------------
+
+
 const char *AP_SSID = "drone-shakeout";
 const char *AP_PASS = "hover1234";
 const uint8_t AP_CHANNEL = 6;           // 1, 6, or 11 -- pick the emptiest
@@ -51,9 +21,7 @@ const uint32_t LOOP_HZ = 100;
 const uint32_t LOOP_US = 1000000UL / LOOP_HZ;
 const uint32_t LINK_TIMEOUT_MS = 200;
 const float MAX_ANGLE_DEG = 25.0f;
-// ---------------------------------------------------------------------------
-// MSP
-// ---------------------------------------------------------------------------
+
 const uint8_t MSP_SET_RAW_RC = 200;
 const uint8_t MSP_STATUS_EX = 150;  // reply carries armingDisableFlags cleanly
 static void mspSend(HardwareSerial &s, uint8_t cmd,

@@ -12,5 +12,12 @@ dependencies = [
     "pygame>=2.6.1",
 ]
 
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [tool.uv.sources]
 pseyepy = { git = "https://github.com/iqsnider/pseyepy" }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/calibration", "src/drone"]

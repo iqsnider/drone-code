@@ -1,34 +1,12 @@
-#!/usr/bin/env python3
+"""Locate every camera in space from a single ArUco marker.
+
+The marker defines the world frame: its centre is the origin, its edges are X
+and Y, its normal is +Z (up). Lay it flat and face up where BOTH cameras can
+see it at an angle, do not move it between cameras, and each camera solves its
+own pose against it. The result is written into config/cameraN.json as
+"extrinsics" (plus the legacy position/look_at fields).
 """
-Locate two PS3Eye cameras in a shared world frame from a single ArUco marker
-(DICT_4X4_250, id 241) and write the result back into camera0.json / camera1.json.
-
-WORLD FRAME == MARKER FRAME
-    origin : marker centre
-    +X     : marker "right"  (corner 0 -> corner 1)
-    +Y     : marker "up", still in the marker plane
-    +Z     : out of the printed face
-
-Lay the marker flat on the floor, printed side up, and the world is Z-up --
-which is what the configs already assume ("up": [0, 0, 1]).
-
-WHAT GETS WRITTEN (same convention already in the files)
-    extrinsics.rvec           Rodrigues vector, world -> camera
-    extrinsics.tvec           translation, world -> camera, metres
-    extrinsics._position_m    -R^T @ t   (camera centre in world)
-    extrinsics._reproj_rms_px RMS reprojection error over the 4 corners
-
-  i.e.  X_cam = R(rvec) @ X_world + tvec        (standard OpenCV)
-
-EXPOSURE / GAIN
-    The exposure and gain stored in each json are for blob tracking and are
-    usually far too dark for a printed marker.  This script opens the cameras
-    with DETECT_EXPOSURE / DETECT_GAIN instead, restores the json values on the
-    way out, and never writes the boosted numbers to disk.
-
-Just run it:   python aruco_locate_cameras.py
-"""
-
+import argparse
 import json
 import shutil
 import sys
@@ -38,27 +16,29 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from calibration import camera_ids
+
 # ==========================================================================
 # everything configurable lives here
 # ==========================================================================
-# Where the camera jsons live. Edit PROJECT_DIR to your actual project folder;
-# "~" is expanded for you. If that path does not pan out the script also looks
-# in <script dir>/config and ./config before giving up.
-PROJECT_DIR = Path("~/drone-code").expanduser()
+PROJECT_DIR = Path(__file__).resolve().parents[2]
 CONFIG_DIR = PROJECT_DIR / "config"
 CAMERA_FILES = ["camera0.json", "camera1.json"]
 
+# Marker geometry comes from markers.json so this and the rig share one source
+# of truth; the values below are only the fallback if that file is missing.
 MARKER_ID = 241
 MARKER_EDGE_LENGTH = 0.15          # metres, outer edge of the black square
-ARUCO_DICT_ID = cv2.aruco.DICT_4X4_250
+ARUCO_DICT_NAME = "DICT_4X4_250"
 
-DETECT_EXPOSURE = 180              # PS3Eye range 0-255, temporary, not saved
-DETECT_GAIN = 30                   # PS3Eye range 0-63,  temporary, not saved
+DETECT_EXPOSURE = 255              # PS3Eye range 0-255, temporary, not saved
+DETECT_GAIN = 63                   # PS3Eye range 0-63,  temporary, not saved
+DETECT_FPS = 15                    # low fps -> longer integration, ~3x brighter
 
 SAMPLES = 60                       # good detections to average per camera
 MIN_SAMPLES = 10                   # below this, give up rather than guess
 WARMUP_FRAMES = 15                 # discarded while the sensor settles
-TIMEOUT_S = 30.0                   # per camera
+TIMEOUT_S = 45.0                   # per camera (generous: DETECT_FPS is low)
 
 BACKEND = "auto"                   # "auto" | "pseyepy" | "opencv"
 SHOW_PREVIEW = True
@@ -68,23 +48,24 @@ WRITE_BACKUP = True                # leaves a camera0.json.bak next to each file
 
 
 def resolve_config_dir():
-    candidates = [CONFIG_DIR,
-                  Path(__file__).resolve().parent / "config",
-                  Path.cwd() / "config"]
-    seen = []
-    for c in candidates:
-        if c in seen:
-            continue
-        seen.append(c)
+    for c in [CONFIG_DIR, Path.cwd() / "config"]:
         if c.is_dir() and all((c / n).is_file() for n in CAMERA_FILES):
-            if c != CONFIG_DIR:
-                print(f"note: {CONFIG_DIR} not usable, using {c} instead")
             return c
-    raise SystemExit(
-        "could not find " + " and ".join(CAMERA_FILES) + " in any of:\n  "
-        + "\n  ".join(str(c) for c in seen)
-        + "\nEdit PROJECT_DIR at the top of this script."
-    )
+    raise SystemExit("could not find " + " and ".join(CAMERA_FILES)
+                     + f" in {CONFIG_DIR} or {Path.cwd() / 'config'}")
+
+
+def load_marker_spec():
+    """Marker id / edge length / dictionary from markers.json, if present."""
+    global MARKER_ID, MARKER_EDGE_LENGTH, ARUCO_DICT_NAME
+    path = PROJECT_DIR / "markers.json"
+    if not path.is_file():
+        print(f"note: no {path}, using built-in marker defaults")
+        return
+    spec = json.loads(path.read_text())
+    MARKER_ID = int(spec["origin_id"])
+    MARKER_EDGE_LENGTH = float(spec["marker_length_m"])
+    ARUCO_DICT_NAME = spec["dictionary"]
 
 
 # --------------------------------------------------------------------------
@@ -104,31 +85,23 @@ def _tune_params(p):
 
 def make_detect_fn():
     """Returns detect(gray) -> (corners, ids)."""
-    if hasattr(cv2.aruco, "getPredefinedDictionary"):
-        d = cv2.aruco.getPredefinedDictionary(ARUCO_DICT_ID)
-    else:
-        d = cv2.aruco.Dictionary_get(ARUCO_DICT_ID)
-
-    if hasattr(cv2.aruco, "ArucoDetector"):  # OpenCV >= 4.7
-        det = cv2.aruco.ArucoDetector(d, _tune_params(cv2.aruco.DetectorParameters()))
-        return lambda gray: det.detectMarkers(gray)[:2]
-
-    params = _tune_params(cv2.aruco.DetectorParameters_create())
-    return lambda gray: cv2.aruco.detectMarkers(gray, d, parameters=params)[:2]
+    d = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, ARUCO_DICT_NAME))
+    det = cv2.aruco.ArucoDetector(d, _tune_params(cv2.aruco.DetectorParameters()))
+    return lambda gray: det.detectMarkers(gray)[:2]
 
 
 # --------------------------------------------------------------------------
 # capture backends -- both boost exposure/gain on open, restore them on close
 # --------------------------------------------------------------------------
 class PseyepyGrabber:
-    def __init__(self, cfg):
+    def __init__(self, cfg, index):
         from pseyepy import Camera
         self.native_exposure = int(cfg.get("exposure", 60))
         self.native_gain = int(cfg.get("gain", 40))
         large = str(cfg.get("resolution", "large")).lower().startswith("l")
         self.cam = Camera(
-            cfg["index"],
-            fps=int(cfg.get("fps", 60)),
+            index,
+            fps=DETECT_FPS,
             resolution=Camera.RES_LARGE if large else Camera.RES_SMALL,
             colour=False,
             gain=DETECT_GAIN,
@@ -152,17 +125,20 @@ class PseyepyGrabber:
 
 
 class CvGrabber:
-    def __init__(self, cfg):
+    """V4L2 fallback. Note this path has no access to USB port paths, so it can
+    only address cameras by index and is still swap-prone."""
+
+    def __init__(self, cfg, index):
         self.native_exposure = float(cfg.get("exposure", 60))
         self.native_gain = float(cfg.get("gain", 40))
         large = str(cfg.get("resolution", "large")).lower().startswith("l")
         w, h = (640, 480) if large else (320, 240)
-        self.cap = cv2.VideoCapture(int(cfg["index"]))
+        self.cap = cv2.VideoCapture(int(index))
         if not self.cap.isOpened():
-            raise RuntimeError(f"could not open camera index {cfg['index']}")
+            raise RuntimeError(f"could not open camera index {index}")
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
-        self.cap.set(cv2.CAP_PROP_FPS, int(cfg.get("fps", 60)))
+        self.cap.set(cv2.CAP_PROP_FPS, DETECT_FPS)
         self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)   # 1 == manual on V4L2
         self.cap.set(cv2.CAP_PROP_EXPOSURE, float(DETECT_EXPOSURE))
         self.cap.set(cv2.CAP_PROP_GAIN, float(DETECT_GAIN))
@@ -185,15 +161,15 @@ class CvGrabber:
         self.cap.release()
 
 
-def open_camera(cfg):
+def open_camera(cfg, index):
     if BACKEND in ("auto", "pseyepy"):
         try:
-            return PseyepyGrabber(cfg)
+            return PseyepyGrabber(cfg, index)
         except Exception as e:
             if BACKEND == "pseyepy":
                 raise
             print(f"  pseyepy unavailable ({e}); falling back to cv2.VideoCapture")
-    return CvGrabber(cfg)
+    return CvGrabber(cfg, index)
 
 
 # --------------------------------------------------------------------------
@@ -253,7 +229,7 @@ def look_at_point(centre, forward):
 # --------------------------------------------------------------------------
 # per-camera capture + solve
 # --------------------------------------------------------------------------
-def locate_camera(cfg_path, detect):
+def locate_camera(cfg_path, detect, index):
     cfg = json.loads(Path(cfg_path).read_text())
     K = np.array([[cfg["fx"], 0.0, cfg["cx"]],
                   [0.0, cfg["fy"], cfg["cy"]],
@@ -261,11 +237,14 @@ def locate_camera(cfg_path, detect):
     dist = np.array(cfg.get("dist", cfg.get("distortion", [0, 0, 0, 0, 0])),
                     dtype=np.float64).reshape(-1, 1)
 
-    print(f"\n=== {cfg_path}  (device index {cfg['index']}) ===")
+    port = cfg.get("usb_port")
+    print(f"\n=== {cfg_path}  (device index {index}"
+          f"{', USB port ' + port if port else ''}) ===")
     print(f"  exposure {cfg.get('exposure')} -> {DETECT_EXPOSURE}, "
-          f"gain {cfg.get('gain')} -> {DETECT_GAIN}  (temporary)")
+          f"gain {cfg.get('gain')} -> {DETECT_GAIN}, "
+          f"fps {cfg.get('fps')} -> {DETECT_FPS}  (temporary)")
 
-    grab = open_camera(cfg)
+    grab = open_camera(cfg, index)
     obj_pts = marker_object_points()
 
     samples = []
@@ -310,10 +289,18 @@ def locate_camera(cfg_path, detect):
             cv2.destroyWindow(win)
 
     if len(samples) < MIN_SAMPLES:
+        if DETECT_EXPOSURE >= 255 and DETECT_GAIN >= 63:
+            hint = ("Already at max gain/exposure, so add light rather than "
+                    "turning knobs -- and if the lenses have IR-pass filters, "
+                    "printed ink needs an IR-rich lamp or the filter removed")
+        else:
+            hint = (f"Raise --exposure / --gain (now {DETECT_EXPOSURE}/"
+                    f"{DETECT_GAIN}, max 255/63) or lower --fps (now "
+                    f"{DETECT_FPS}) for a longer exposure")
         raise RuntimeError(
             f"only {len(samples)} detections of marker {MARKER_ID} in "
-            f"{seen_frames} frames. Raise DETECT_EXPOSURE / DETECT_GAIN, check "
-            "focus, and make sure the whole marker plus its white border is in view."
+            f"{seen_frames} frames. {hint}. Also check focus, and that the "
+            "whole marker plus its white border is in view."
         )
 
     stack = np.stack(samples)                       # (N, 4, 2)
@@ -358,19 +345,55 @@ def locate_camera(cfg_path, detect):
 
 
 # --------------------------------------------------------------------------
+def parse_args():
+    ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
+    ap.add_argument("--exposure", type=int, default=DETECT_EXPOSURE,
+                    metavar="0-255",
+                    help=f"temporary detection exposure (default {DETECT_EXPOSURE})")
+    ap.add_argument("--gain", type=int, default=DETECT_GAIN, metavar="0-63",
+                    help=f"temporary detection gain (default {DETECT_GAIN})")
+    ap.add_argument("--fps", type=int, default=DETECT_FPS, metavar="FPS",
+                    help=f"lower fps = longer exposure = brighter "
+                         f"(default {DETECT_FPS})")
+    args = ap.parse_args()
+    if not 0 <= args.exposure <= 255:
+        ap.error("--exposure must be 0-255")
+    if not 0 <= args.gain <= 63:
+        ap.error("--gain must be 0-63")
+    if args.fps < 1:
+        ap.error("--fps must be >= 1")
+    return args
+
+
 def main():
-    print(f"marker: DICT_4X4_250 id {MARKER_ID}, "
+    global DETECT_EXPOSURE, DETECT_GAIN, DETECT_FPS
+    args = parse_args()
+    DETECT_EXPOSURE, DETECT_GAIN, DETECT_FPS = args.exposure, args.gain, args.fps
+
+    load_marker_spec()
+    print(f"marker: {ARUCO_DICT_NAME} id {MARKER_ID}, "
           f"{MARKER_EDGE_LENGTH * 1000:.0f} mm outer edge")
     print("Do NOT move the marker between cameras -- it defines the shared frame.")
 
     config_dir = resolve_config_dir()
     print(f"config dir: {config_dir}")
 
+    cfgs = [json.loads((config_dir / n).read_text()) for n in CAMERA_FILES]
+    if BACKEND == "opencv":
+        indices = [int(c["index"]) for c in cfgs]
+    else:
+        try:
+            indices = camera_ids.resolve_indices(cfgs)
+        except ImportError as e:
+            print(f"  ** cannot resolve USB ports ({e}); using index fields, "
+                  "which may be swapped")
+            indices = [int(c["index"]) for c in cfgs]
+
     detect = make_detect_fn()
     results = []
-    for name in CAMERA_FILES:
+    for name, index in zip(CAMERA_FILES, indices):
         path = config_dir / name
-        results.append((path, *locate_camera(path, detect)))
+        results.append((path, *locate_camera(path, detect, index)))
 
     if len(results) >= 2:
         print("\n=== sanity check ===")
