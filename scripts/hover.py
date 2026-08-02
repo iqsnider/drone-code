@@ -1,23 +1,3 @@
-#!/usr/bin/env python3
-"""Autonomous LQR hover over the mocap origin.
-
-    uv run scripts/hover.py --dry-run     # computes commands, transmits nothing
-    uv run scripts/hover.py               # live
-
-Vision -> EKF -> LQR -> UDP CmdPacket to the ESP32, which speaks MSP to
-Betaflight. Betaflight holds attitude; this holds position.
-
-SAFETY. This commands a real aircraft.
-  * Bring up in order: --dry-run, then props OFF watching the commanded
-    roll/pitch/throttle react the right way as you move the drone by hand,
-    then tethered, then free.
-  * The sign_roll / sign_pitch / sign_yaw entries in drone.json are unknown for
-    any given airframe and Betaflight setup. Verify them with props off.
-  * Starts DISARMED. You must arm, then engage, and engage is refused unless
-    the EKF is tracking.
-  * Keep the transmitter bound as an independent kill path. This is not a
-    substitute for it.
-"""
 import argparse
 import json
 import time
@@ -36,7 +16,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true",
                     help="run the whole loop but never transmit")
     ap.add_argument("--height", type=float, default=None,
-                    help="override hover height in metres")
+                    help="override hover height in meters")
     args = ap.parse_args()
 
     import pygame
@@ -68,9 +48,9 @@ def main():
     last = time.perf_counter()
     cut_reason = ""
 
-    def hud(lines, banner, colour):
+    def hud(lines, banner, color):
         screen.fill((22, 22, 26))
-        screen.blit(big.render(banner, True, colour), (20, 16))
+        screen.blit(big.render(banner, True, color), (20, 16))
         y = 62
         for ln in lines:
             screen.blit(font.render(ln, True, (215, 215, 215)), (20, y))
@@ -123,9 +103,8 @@ def main():
                     cut_reason = "manual CUT"
                 armed = engaged = False
 
-            # --- command synthesis ---
-            roll = pitch = yaw_cmd = 0.0
-            throttle = 0.0
+            roll = pitch = yaw_cmd = 0
+            throttle = 0
             if armed and engaged:
                 if tracking:
                     loss_t0 = None
@@ -163,11 +142,11 @@ def main():
 
             # --- HUD ---
             if engaged:
-                banner, colour = "ENGAGED", (40, 200, 90)
+                banner, color = "ENGAGED", (40, 200, 90)
             elif armed:
-                banner, colour = "ARMED (idle)", (230, 180, 40)
+                banner, color = "ARMED (idle)", (230, 180, 40)
             else:
-                banner, colour = "DISARMED", (150, 150, 150)
+                banner, color = "DISARMED", (150, 150, 150)
             if args.dry_run:
                 banner += "  [DRY RUN]"
 
@@ -199,7 +178,7 @@ def main():
                 lines.append("FC arming: %s" % decode_arm_flags(telem[7]))
             elif not args.dry_run:
                 lines.append("FC       : no telemetry -- check wifi to the ESP32")
-            hud(lines, banner, colour)
+            hud(lines, banner, color)
     finally:
         link.disarm_burst()
         tracker.close()

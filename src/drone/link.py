@@ -1,14 +1,9 @@
-"""UDP link to the ESP32 bridge. Wire formats must match src/main.cpp exactly.
-
-Shared by every script that commands the aircraft, so the packet layout lives
-in exactly one place.
-"""
 import socket
 import struct
 import time
 
-CMD_FMT = "<IBffffB"        # seq, flags, roll, pitch, yaw, throttle, angleMode
-TELEM_FMT = "<IBffffHIH"    # seq, state, r, p, y, thr, loopMaxUs, armFlags, lossPerMil
+CMD_FMT = "<IBffffB"
+TELEM_FMT = "<IBffffHIH"
 TELEM_SIZE = struct.calcsize(TELEM_FMT)
 FLAG_ARM = 0x01
 CMD_PORT = 9000
@@ -33,8 +28,6 @@ def decode_arm_flags(flags):
 
 
 class Link:
-    """UDP command/telemetry pair to the ESP32."""
-
     def __init__(self, esp_ip, send=True):
         self.esp = (esp_ip, CMD_PORT)
         self.send_enabled = send

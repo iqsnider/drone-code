@@ -1,10 +1,3 @@
-"""Tune the IR blob detection settings for each camera.
-
-Shows a live view per camera with trackbars for exposure, gain, threshold and
-the blob size/shape limits, and circles every blob that currently passes. Tune
-until exactly the drone's IR LEDs are circled and nothing else, then press 's'
-to write the values back into config/cameraN.json.
-"""
 import argparse
 import json
 from pathlib import Path
@@ -14,9 +7,10 @@ import numpy as np
 
 from calibration import camera_ids
 
+from pseyepy import Camera
+
 CAMERA_FILES = ["camera0.json", "camera1.json"]
 
-# (trackbar label, config key, trackbar max, trackbar -> config scale)
 TRACKBARS = [
     ("exposure", "exposure", 255, 1),
     ("gain", "gain", 63, 1),
@@ -27,15 +21,8 @@ TRACKBARS = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# detection
-# ---------------------------------------------------------------------------
 def detect_centroids(gray, cfg, max_n=3):
-    """Brightest blobs passing the size/shape gates, as sub-pixel centroids.
-
-    Returns (points, mask) where points is [(x, y), ...] brightest first.
-    """
-    k = int(cfg["blur_ksize"]) | 1               # GaussianBlur needs an odd size
+    k = int(cfg["blur_ksize"]) | 1
     blur = cv2.GaussianBlur(gray, (k, k), 0)
     _, mask = cv2.threshold(blur, int(cfg["thresh"]), 255, cv2.THRESH_BINARY)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -60,15 +47,11 @@ def detect_centroids(gray, cfg, max_n=3):
         inten = cv2.mean(gray[y:y + h, x:x + w], mask=cmask)[0]
         out.append((cx, cy, inten))
 
-    out.sort(key=lambda t: -t[2])                # brightest first
+    out.sort(key=lambda t: -t[2])
     return [(cx, cy) for cx, cy, _ in out[:max_n]], mask
 
 
-# ---------------------------------------------------------------------------
-# capture
-# ---------------------------------------------------------------------------
 def open_cameras(cfgs, indices):
-    from pseyepy import Camera
     large = str(cfgs[0]["resolution"]).lower().startswith("l")
     cam = Camera(list(indices),
                  fps=int(cfgs[0]["fps"]),
@@ -85,9 +68,6 @@ def read_grays(cam):
     return [np.asarray(f) for f in frames]
 
 
-# ---------------------------------------------------------------------------
-# trackbars
-# ---------------------------------------------------------------------------
 def make_windows(cfgs):
     for i, c in enumerate(cfgs):
         win = f"cam{i}"
@@ -117,7 +97,6 @@ def save_configs(cfgs, cfgdir, tvals):
         print(f"  saved -> {path}")
 
 
-# ---------------------------------------------------------------------------
 def run(cfgdir):
     cfgs = [json.loads((cfgdir / n).read_text()) for n in CAMERA_FILES]
     indices = camera_ids.resolve_indices(cfgs)
@@ -149,11 +128,11 @@ def run(cfgdir):
                     cv2.circle(disp, (int(x), int(y)), 8, (0, 255, 0), 1)
                     cv2.drawMarker(disp, (int(x), int(y)), (0, 255, 0),
                                    cv2.MARKER_CROSS, 12, 1)
-                colour = (0, 255, 0) if len(pts) == 3 else (0, 255, 255)
+                color = (0, 255, 0) if len(pts) == 3 else (0, 255, 255)
                 cv2.putText(disp, f"cam{i}  blobs={len(pts)}/3  "
                             f"exp={int(tvals[i]['exposure'])} "
                             f"gain={int(tvals[i]['gain'])}",
-                            (6, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 1)
+                            (6, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
                 cv2.imshow(f"cam{i}", disp)
 
             key = cv2.waitKey(1) & 0xFF
@@ -175,14 +154,9 @@ def main():
                     help="directory holding camera0.json and camera1.json")
     args = ap.parse_args()
 
-    missing = [n for n in CAMERA_FILES if not (args.config / n).is_file()]
-    if missing:
-        raise SystemExit(f"missing {', '.join(missing)} in {args.config}")
-
     print(f"config dir: {args.config}")
     run(args.config)
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

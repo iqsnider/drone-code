@@ -1,18 +1,3 @@
-"""Level calibration: rotate led_body so a level drone reads zero attitude.
-
-led_body does not merely say where the LEDs are, it *defines* the body frame
-every attitude reading is expressed in. If the recorded LED positions are
-tilted with respect to the airframe, each pose inherits that tilt as a constant
-offset -- a bias no amount of filtering will remove, because nothing in the rig
-knows which way the drone is really facing. Hand measurement is prone to it:
-the LEDs sit within a couple of centimetres of each other in height, so a few
-millimetres of error there is many degrees of implied tilt.
-
-The one reference the rig cannot infer is the drone sitting level. Measure the
-attitude reported while it is flat, rotate led_body by exactly that, and level
-reads zero from then on. Yaw is left alone -- it is fixed by which way the LEDs
-point, and is only ever meaningful relative to itself.
-"""
 import argparse
 import json
 import shutil
@@ -24,8 +9,8 @@ import numpy as np
 
 from drone.pose import PoseTracker
 
-MIN_SAMPLES = 100           # below this the average is not worth trusting
-MAX_SPREAD_DEG = 1.5        # above this the drone was moving, not sitting still
+MIN_SAMPLES = 100
+MAX_SPREAD_DEG = 1.5
 
 
 def _Rx(a):
@@ -39,12 +24,10 @@ def _Ry(a):
 
 
 def correction_matrix(roll_deg, pitch_deg):
-    """Rotation to apply to led_body to null a measured level tilt."""
     return _Ry(np.radians(pitch_deg)) @ _Rx(np.radians(roll_deg))
 
 
 def measure(tracker, seconds):
-    """Median roll/pitch of the raw pose over `seconds`. Returns (r, p, n, spread)."""
     rows = []
     t0 = time.time()
     while time.time() - t0 < seconds:
@@ -59,7 +42,6 @@ def measure(tracker, seconds):
 
 
 def apply_correction(cfgdir, led_body, roll, pitch):
-    """Rotate led_body and write it back, leaving a .bak beside the original."""
     C = correction_matrix(roll, pitch)
     new = (C @ np.asarray(led_body, float).T).T
 
@@ -121,7 +103,6 @@ def main():
             print(f"  LED{i}: [{o[0]:+.4f}, {o[1]:+.4f}, {o[2]:+.4f}]"
                   f" -> [{v[0]:+.4f}, {v[1]:+.4f}, {v[2]:+.4f}]")
 
-        # verify against the same drone, still sitting where it was
         tracker.led_body = new
         tracker.ekf.b = new
         tracker.ekf.reset()
@@ -136,8 +117,7 @@ def main():
                       "actually level, and is the marker surface level too?")
     finally:
         tracker.close()
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main

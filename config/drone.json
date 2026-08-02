@@ -1,19 +1,19 @@
 {
   "led_body": [
     [
-      -0.06073,
-      -6e-05,
-      0.05254
+      -0.05557,
+      -0.00243,
+      0.05792
     ],
     [
-      0.03173,
-      0.08242,
-      0.04616
+      0.03624,
+      0.08025,
+      0.04666
     ],
     [
-      -0.00145,
-      -0.07161,
-      0.03281
+      0.00131,
+      -0.07302,
+      0.02955
     ]
   ],
   "mass_kg": 0.1575,
@@ -115,8 +115,8 @@
     "frame": "levelled against the drone sitting flat",
     "note": "orientation now only affects the LED-centroid lever arm; attitude comes from the FC IMU",
     "level_correction_deg": {
-      "roll": 2.929,
-      "pitch": -0.52,
+      "roll": 2.59,
+      "pitch": 5.356,
       "on": "2026-08-01"
     }
   }

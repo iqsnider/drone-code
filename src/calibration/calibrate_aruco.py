@@ -1,11 +1,3 @@
-"""Locate every camera in space from a single ArUco marker.
-
-The marker defines the world frame: its centre is the origin, its edges are X
-and Y, its normal is +Z (up). Lay it flat and face up where BOTH cameras can
-see it at an angle, do not move it between cameras, and each camera solves its
-own pose against it. The result is written into config/cameraN.json as
-"extrinsics" (plus the legacy position/look_at fields).
-"""
 import argparse
 import json
 import shutil
@@ -18,33 +10,27 @@ import numpy as np
 
 from calibration import camera_ids
 
-# ==========================================================================
-# everything configurable lives here
-# ==========================================================================
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 CONFIG_DIR = PROJECT_DIR / "config"
 CAMERA_FILES = ["camera0.json", "camera1.json"]
 
-# Marker geometry comes from markers.json so this and the rig share one source
-# of truth; the values below are only the fallback if that file is missing.
 MARKER_ID = 241
-MARKER_EDGE_LENGTH = 0.15          # metres, outer edge of the black square
+MARKER_EDGE_LENGTH = 0.15 # [m]
 ARUCO_DICT_NAME = "DICT_4X4_250"
 
-DETECT_EXPOSURE = 255              # PS3Eye range 0-255, temporary, not saved
-DETECT_GAIN = 63                   # PS3Eye range 0-63,  temporary, not saved
-DETECT_FPS = 15                    # low fps -> longer integration, ~3x brighter
+DETECT_EXPOSURE = 255
+DETECT_GAIN = 63
+DETECT_FPS = 15
 
-SAMPLES = 60                       # good detections to average per camera
-MIN_SAMPLES = 10                   # below this, give up rather than guess
-WARMUP_FRAMES = 15                 # discarded while the sensor settles
-TIMEOUT_S = 45.0                   # per camera (generous: DETECT_FPS is low)
+SAMPLES = 60
+MIN_SAMPLES = 10
+WARMUP_FRAMES = 15
+TIMEOUT_S = 45
 
-BACKEND = "auto"                   # "auto" | "pseyepy" | "opencv"
+BACKEND = "auto"
 SHOW_PREVIEW = True
-UPDATE_LOOKAT = True               # also refresh the legacy position/look_at
-WRITE_BACKUP = True                # leaves a camera0.json.bak next to each file
-# ==========================================================================
+UPDATE_LOOKAT = True
+WRITE_BACKUP = True
 
 
 def resolve_config_dir():
@@ -68,15 +54,11 @@ def load_marker_spec():
     ARUCO_DICT_NAME = spec["dictionary"]
 
 
-# --------------------------------------------------------------------------
-# aruco compatibility (OpenCV 4.7 renamed most of this API)
-# --------------------------------------------------------------------------
 def _tune_params(p):
     p.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
     p.cornerRefinementWinSize = 5
     p.cornerRefinementMaxIterations = 50
     p.cornerRefinementMinAccuracy = 0.01
-    # PS3Eye at 640x480 vignettes hard -> be generous with the thresholding
     p.adaptiveThreshWinSizeMin = 3
     p.adaptiveThreshWinSizeMax = 43
     p.adaptiveThreshWinSizeStep = 8
@@ -84,15 +66,14 @@ def _tune_params(p):
 
 
 def make_detect_fn():
-    """Returns detect(gray) -> (corners, ids)."""
+    """
+    Returns detect(gray) -> (corners, ids).
+    """
     d = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, ARUCO_DICT_NAME))
     det = cv2.aruco.ArucoDetector(d, _tune_params(cv2.aruco.DetectorParameters()))
     return lambda gray: det.detectMarkers(gray)[:2]
 
 
-# --------------------------------------------------------------------------
-# capture backends -- both boost exposure/gain on open, restore them on close
-# --------------------------------------------------------------------------
 class PseyepyGrabber:
     def __init__(self, cfg, index):
         from pseyepy import Camera
@@ -105,8 +86,7 @@ class PseyepyGrabber:
             resolution=Camera.RES_LARGE if large else Camera.RES_SMALL,
             colour=False,
             gain=DETECT_GAIN,
-            exposure=DETECT_EXPOSURE,
-        )
+            exposure=DETECT_EXPOSURE)
 
     def read_gray(self):
         frame, _ts = self.cam.read()
@@ -125,8 +105,6 @@ class PseyepyGrabber:
 
 
 class CvGrabber:
-    """V4L2 fallback. Note this path has no access to USB port paths, so it can
-    only address cameras by index and is still swap-prone."""
 
     def __init__(self, cfg, index):
         self.native_exposure = float(cfg.get("exposure", 60))
@@ -152,44 +130,25 @@ class CvGrabber:
         return frame
 
     def close(self):
-        # V4L2 settings stick to the device after release, so put them back
-        try:
-            self.cap.set(cv2.CAP_PROP_EXPOSURE, self.native_exposure)
-            self.cap.set(cv2.CAP_PROP_GAIN, self.native_gain)
-        except Exception:
-            pass
+        self.cap.set(cv2.CAP_PROP_EXPOSURE, self.native_exposure)
+        self.cap.set(cv2.CAP_PROP_GAIN, self.native_gain)
         self.cap.release()
 
 
 def open_camera(cfg, index):
     if BACKEND in ("auto", "pseyepy"):
-        try:
-            return PseyepyGrabber(cfg, index)
-        except Exception as e:
-            if BACKEND == "pseyepy":
-                raise
-            print(f"  pseyepy unavailable ({e}); falling back to cv2.VideoCapture")
+        return PseyepyGrabber(cfg, index)
     return CvGrabber(cfg, index)
 
-
-# --------------------------------------------------------------------------
-# geometry
-# --------------------------------------------------------------------------
 def marker_object_points():
-    """Corner order matches cv2.aruco: TL, TR, BR, BL in the marker's own frame."""
-    h = MARKER_EDGE_LENGTH / 2.0
-    return np.array([[-h,  h, 0.0],
-                     [ h,  h, 0.0],
-                     [ h, -h, 0.0],
-                     [-h, -h, 0.0]], dtype=np.float64)
+    h = MARKER_EDGE_LENGTH / 2
+    return np.array([[-h, h, 0],
+                     [h, h, 0],
+                     [h, -h, 0],
+                     [-h, -h, 0]], dtype=np.float64)
 
 
 def solve_pose(obj_pts, img_pts, K, dist):
-    """
-    IPPE_SQUARE is the right solver for a single square planar marker: it is
-    exact, and it hands back BOTH mirror solutions so the ambiguity of the view
-    can be measured instead of silently picking a flipped pose.
-    """
     _, rvecs, tvecs, errs = cv2.solvePnPGeneric(
         obj_pts, img_pts, K, dist, flags=cv2.SOLVEPNP_IPPE_SQUARE
     )
@@ -207,7 +166,7 @@ def reproj_rms(obj_pts, img_pts, rvec, tvec, K, dist):
     return float(np.sqrt(np.mean(np.sum(d * d, axis=1))))
 
 
-def camera_centre(rvec, tvec):
+def camera_center(rvec, tvec):
     R, _ = cv2.Rodrigues(rvec)
     return (-R.T @ tvec.reshape(3, 1)).ravel()
 
@@ -217,23 +176,19 @@ def optical_axis(rvec):
     return (R.T @ np.array([0.0, 0.0, 1.0])).ravel()
 
 
-def look_at_point(centre, forward):
-    """Where the optical axis hits the marker plane z = 0; else a point ahead."""
+def look_at_point(center, forward):
     if abs(forward[2]) > 1e-6:
-        t = -centre[2] / forward[2]
+        t = -center[2] / forward[2]
         if t > 0:
-            return centre + t * forward
-    return centre + float(np.linalg.norm(centre)) * forward
+            return center + t * forward
+    return center + float(np.linalg.norm(center)) * forward
 
 
-# --------------------------------------------------------------------------
-# per-camera capture + solve
-# --------------------------------------------------------------------------
 def locate_camera(cfg_path, detect, index):
     cfg = json.loads(Path(cfg_path).read_text())
-    K = np.array([[cfg["fx"], 0.0, cfg["cx"]],
-                  [0.0, cfg["fy"], cfg["cy"]],
-                  [0.0, 0.0, 1.0]], dtype=np.float64)
+    K = np.array([[cfg["fx"], 0, cfg["cx"]],
+                  [0, cfg["fy"], cfg["cy"]],
+                  [0, 0, 1]], dtype=np.float64)
     dist = np.array(cfg.get("dist", cfg.get("distortion", [0, 0, 0, 0, 0])),
                     dtype=np.float64).reshape(-1, 1)
 
@@ -303,24 +258,24 @@ def locate_camera(cfg_path, detect, index):
             "whole marker plus its white border is in view."
         )
 
-    stack = np.stack(samples)                       # (N, 4, 2)
-    img_pts = np.median(stack, axis=0)              # robust to the odd bad frame
+    stack = np.stack(samples)
+    img_pts = np.median(stack, axis=0)
     jitter = float(np.mean(np.std(stack, axis=0)))
 
     rvec, tvec, ambiguity = solve_pose(obj_pts, img_pts, K, dist)
     rms = reproj_rms(obj_pts, img_pts, rvec, tvec, K, dist)
-    centre = camera_centre(rvec, tvec)
+    center = camera_center(rvec, tvec)
     fwd = optical_axis(rvec)
 
     print(f"  detections     : {len(samples)} / {seen_frames} frames "
           f"(corner jitter {jitter:.3f} px)")
     print(f"  reproj RMS     : {rms:.3f} px")
-    print(f"  position (m)   : [{centre[0]:+.4f}, {centre[1]:+.4f}, {centre[2]:+.4f}]")
-    print(f"  distance       : {np.linalg.norm(tvec):.3f} m to marker centre")
-    if ambiguity < 3.0:
+    print(f"  position (m)   : [{center[0]:+.4f}, {center[1]:+.4f}, {center[2]:+.4f}]")
+    print(f"  distance       : {np.linalg.norm(tvec):.3f} m to marker center")
+    if ambiguity < 3:
         print(f"  ** WARNING: planar pose ambiguity (error ratio {ambiguity:.2f}). "
               "View the marker more obliquely or from closer up.")
-    if rms > 1.0:
+    if rms > 1:
         print("  ** WARNING: high reprojection error. fx/fy/cx/cy look like "
               "placeholders and there are no distortion coefficients -- run an "
               "intrinsic calibration for real accuracy.")
@@ -328,12 +283,12 @@ def locate_camera(cfg_path, detect, index):
     cfg["extrinsics"] = {
         "rvec": [round(float(v), 6) for v in rvec],
         "tvec": [round(float(v), 6) for v in tvec],
-        "_position_m": [round(float(v), 4) for v in centre],
+        "_position_m": [round(float(v), 4) for v in center],
         "_reproj_rms_px": round(rms, 3),
     }
     if UPDATE_LOOKAT:
-        la = look_at_point(centre, fwd)
-        cfg["position"] = [round(float(v), 4) for v in centre]
+        la = look_at_point(center, fwd)
+        cfg["position"] = [round(float(v), 4) for v in center]
         cfg["look_at"] = [round(float(v), 4) for v in la]
 
     out = Path(cfg_path)
@@ -341,10 +296,9 @@ def locate_camera(cfg_path, detect, index):
         shutil.copy2(out, out.with_suffix(out.suffix + ".bak"))
     out.write_text(json.dumps(cfg, indent=2) + "\n")
     print(f"  -> wrote {out}")
-    return centre, fwd
+    return center, fwd
 
 
-# --------------------------------------------------------------------------
 def parse_args():
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     ap.add_argument("--exposure", type=int, default=DETECT_EXPOSURE,

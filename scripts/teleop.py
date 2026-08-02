@@ -1,21 +1,5 @@
 """
-teleop.py  --  keyboard teleop for the ESP32 shakeout (CPython 3.9+)
-
-Connect your PC to the ESP32's WiFi network ("drone-shakeout"), then run:
-
-    uv run teleop.py          (or: python teleop.py)
-
-A window opens. It must have focus for keys to register.
-
-CONTROLS
-  arrows            roll / pitch  (hold = lean, release = level)
-  w / s             throttle up / down
-  a / d             yaw ccw / cw
-  z                 arm / disarm toggle
-  space             instant throttle cut to zero (panic)
-  esc               quit (sends disarm on the way out)
-
-Keep your transmitter on and bound as the independent hardware kill path.
+Connect PC to ESP32's WiFi network ("drone-shakeout")
 """
 
 import socket
@@ -28,22 +12,16 @@ try:
 except ImportError:
     sys.exit("pygame required:  uv add pygame   (or pip install pygame)")
 
-# ---------------------------------------------------------------------------
-# Network
-# ---------------------------------------------------------------------------
-
 ESP_IP = "192.168.4.1"
 CMD_PORT = 9000
 TELEM_PORT = 9001
 
-CMD_FMT = "<IBffffB"          # seq, flags, roll, pitch, yaw, throttle, angle
-TELEM_FMT = "<IBffffHI"       # + loopMax, armFlags
+CMD_FMT = "<IBffffB"
+TELEM_FMT = "<IBffffHI"
 TELEM_SIZE = struct.calcsize(TELEM_FMT)
 
 FLAG_ARM = 0x01
 
-# Betaflight armingDisableFlags bit -> name (4.x ordering). Exact positions
-# can shift slightly between BF versions, but the common ones are stable.
 ARM_FLAG_NAMES = [
     "NO_GYRO", "FAILSAFE", "RX_FAILSAFE", "BAD_RX_RECOVERY",
     "BOXFAILSAFE", "RUNAWAY_TAKEOFF", "CRASH_DETECTED", "THROTTLE",
@@ -65,16 +43,12 @@ def decode_arm_flags(flags):
     return ", ".join(names) if names else "0x%08X" % flags
 
 
-# ---------------------------------------------------------------------------
-# Control shaping
-# ---------------------------------------------------------------------------
-
-MAX_ANGLE_DEG = 25.0     # must not exceed the ESP32's clamp
-ANGLE_RATE = 60.0        # deg/s the commanded lean ramps toward the key
-ANGLE_RETURN = 120.0     # deg/s it returns to level on release
-YAW_RATE = 2.0           # 1/s toward full yaw stick
-THROTTLE_RATE = 0.5      # per second while w/s held
-THROTTLE_MAX = 0.55      # cap for a bench shakeout -- raise deliberately
+MAX_ANGLE_DEG = 25
+ANGLE_RATE = 60
+ANGLE_RETURN = 120
+YAW_RATE = 2
+THROTTLE_RATE = 0.5
+THROTTLE_MAX = 0.55
 
 
 def approach(value, target, rate, dt):
@@ -88,14 +62,14 @@ def approach(value, target, rate, dt):
 
 class TeleopState:
     def __init__(self):
-        self.roll = 0.0
-        self.pitch = 0.0
-        self.yaw = 0.0
-        self.throttle = 0.0
+        self.roll = 0
+        self.pitch = 0
+        self.yaw = 0
+        self.throttle = 0
         self.armed = False
 
     def update(self, keys, dt):
-        roll_target = 0.0
+        roll_target = 0
         if keys[pygame.K_LEFT]:
             roll_target -= MAX_ANGLE_DEG
         if keys[pygame.K_RIGHT]:
@@ -106,25 +80,25 @@ class TeleopState:
         if keys[pygame.K_DOWN]:
             pitch_target -= MAX_ANGLE_DEG
 
-        r_rate = ANGLE_RATE if roll_target != 0.0 else ANGLE_RETURN
-        p_rate = ANGLE_RATE if pitch_target != 0.0 else ANGLE_RETURN
+        r_rate = ANGLE_RATE if roll_target != 0 else ANGLE_RETURN
+        p_rate = ANGLE_RATE if pitch_target != 0 else ANGLE_RETURN
         self.roll = approach(self.roll, roll_target, r_rate, dt)
         self.pitch = approach(self.pitch, pitch_target, p_rate, dt)
 
-        yaw_target = 0.0
+        yaw_target = 0
         if keys[pygame.K_a]:
-            yaw_target -= 1.0
+            yaw_target -= 1
         if keys[pygame.K_d]:
-            yaw_target += 1.0
+            yaw_target += 1
         self.yaw = approach(self.yaw, yaw_target,
                             YAW_RATE if yaw_target else YAW_RATE * 2, dt)
 
         if keys[pygame.K_SPACE]:
-            self.throttle = 0.0
+            self.throttle = 0
         elif keys[pygame.K_w]:
             self.throttle = min(self.throttle + THROTTLE_RATE * dt, THROTTLE_MAX)
         elif keys[pygame.K_s]:
-            self.throttle = max(self.throttle - THROTTLE_RATE * dt, 0.0)
+            self.throttle = max(self.throttle - THROTTLE_RATE * dt, 0)
 
 
 def main():
@@ -163,13 +137,11 @@ def main():
         dt = now - last
         last = now
 
-        # Plain arm/disarm toggle, edge-triggered so one physical tap of 'z'
-        # flips the state exactly once (not every frame the key is held).
         z_now = keys[pygame.K_z]
         if z_now and not prev_z:
             st.armed = not st.armed
             if not st.armed:
-                st.throttle = 0.0
+                st.throttle = 0
         prev_z = z_now
 
         st.update(keys, dt)

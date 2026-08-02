@@ -1,17 +1,3 @@
-#!/usr/bin/env python3
-"""Stream the drone's live pose over a WebSocket and draw it in a browser.
-
-    uv run scripts/drone_pose_viewer.py
-    then open http://127.0.0.1:8000
-
-Pose is in the inertial frame the ArUco calibration fixed: origin at the marker
-centre, +Z up. The cameras are read on the main thread; the HTTP/WebSocket
-server runs alongside and pushes whatever the latest pose is, so a slow or
-absent browser never stalls the tracking loop.
-
-Only the server -> client half of the WebSocket protocol is implemented, which
-is all a one-way telemetry feed needs, and it keeps the project dependency-free.
-"""
 import argparse
 import base64
 import hashlib
@@ -26,12 +12,14 @@ from drone.pose import PoseTracker
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
-_latest = {"t": 0.0, "blobs": [0, 0]}
+_latest = {"t": 0, "blobs": [0, 0]}
 _lock = threading.Lock()
 
 
 def ws_frame(payload):
-    """Wrap bytes in a single unmasked text frame (FIN + opcode 1)."""
+    """
+    Wrap bytes in a single unmasked text frame (FIN + opcode 1).
+    """
     n = len(payload)
     if n < 126:
         head = struct.pack("!BB", 0x81, n)
@@ -74,7 +62,7 @@ PAGE = """<!doctype html>
 
 <div id="read">connecting...</div>
 <script>
-const EXTENT = 1.5;                      // metres shown from the origin
+const EXTENT = 1.5;                      // meters shown from the origin
 let msg = null, lastRx = 0;
 let az = -0.9, el = 0.9;                 // shared orbit for both 3D views
 
@@ -242,7 +230,7 @@ function render() {
       `/${(est.pos_std[2]*1000).toFixed(1)} mm\\n` +
       `      upd  accepted ${est.accepted}  rejected ${est.rejected}` +
       (est.coasting ? `   <- coasting ${(est.age*1000).toFixed(0)} ms` : "")
-    : "EKF   not initialised -- waiting for a trusted raw pose";
+    : "EKF   not initialized -- waiting for a trusted raw pose";
   el_.textContent = s;
 }
 

@@ -1,21 +1,3 @@
-"""Measure hover_ff by finding the throttle at which the drone just floats.
-
-hover_ff is the throttle that exactly cancels weight. It is awkward to get by
-hand -- too low and nothing happens, too high and the aircraft leaps -- and
-being wrong by much makes the first seconds of a flight ugly: the loop lifts
-off hard, then spends the integrator's several-second time constant walking the
-throttle back down, sinking through the setpoint on the way.
-
-So measure it directly. Ramp the throttle up slowly with the drone sitting on
-the floor and watch the mocap. The instant it starts to rise, thrust has just
-passed weight, and the throttle at that moment is hover_ff. The ramp is slow
-enough that motor spin-up lag contributes well under a thousandth of throttle,
-and it never commands more than the throttle that first lifted the aircraft, so
-there is no leap to recover from.
-
-The result is a starting value; the flight loop refines it from there and keeps
-tracking it as the battery sags.
-"""
 import argparse
 import json
 import shutil
@@ -29,29 +11,19 @@ from drone.control_law import G
 from drone.link import Link, decode_arm_flags
 from drone.pose import PoseTracker
 
-RAMP_START = 0.08           # throttle to begin from
-RAMP_RATE = 0.03            # throttle per second -- slow keeps lag negligible
-LIFT_HEIGHT = 0.030         # metres above rest that counts as airborne
-LIFT_SPEED = 0.05           # m/s upward, so a jolt alone does not trigger
-REST_SECONDS = 1.0          # averaging window for the resting height
+RAMP_START = 0.08
+RAMP_RATE = 0.03
+LIFT_HEIGHT = 0.03
+LIFT_SPEED = 0.05
+REST_SECONDS = 1
 RAMP_DOWN_S = 0.6
-TIMEOUT_S = 40.0
+TIMEOUT_S = 40
 
 
 def crossing_throttle(thr_detect, vz, rate):
-    """Throttle at which thrust actually equalled weight, from the detection.
-
-    Liftoff cannot be detected at the instant it happens: the aircraft has to
-    rise far enough to be unambiguous, and the ramp keeps climbing during that
-    window, so the throttle when the motion is noticed always reads high. Over
-    that window acceleration is (thr - hover)/hover * g with thr rising at
-    `rate`, which integrates to vz = (rate*g/hover) * tau^2 / 2 -- so the
-    measured climb rate says how long ago the crossing was, and the ramp says
-    how much throttle has been added since. A few passes settle it.
-    """
     hover = float(thr_detect)
     for _ in range(50):
-        tau = np.sqrt(max(2.0 * vz * hover / (rate * G), 0.0))
+        tau = np.sqrt(max(2*vz*hover / (rate*G), 0))
         hover = float(thr_detect) - rate * tau
         if hover <= 1e-3:
             return float(thr_detect)
@@ -95,7 +67,7 @@ def main():
 
     armed = False
     prev_z = False
-    thr = 0.0
+    thr = 0
     rest = []
     rest_z = None
     result = None
@@ -103,9 +75,9 @@ def main():
     t_arm = None
     last = time.perf_counter()
 
-    def hud(lines, banner, colour):
+    def hud(lines, banner, color):
         screen.fill((22, 22, 26))
-        screen.blit(big.render(banner, True, colour), (20, 16))
+        screen.blit(big.render(banner, True, color), (20, 16))
         y = 62
         for ln in lines:
             screen.blit(font.render(ln, True, (215, 215, 215)), (20, y))
@@ -113,9 +85,6 @@ def main():
         screen.blit(font.render("z start   space CUT   esc quit", True,
                                 (130, 130, 140)), (20, 400 - 28))
         pygame.display.flip()
-
-    print("Stand the drone on the floor, props ON, in view of both cameras.")
-    print("Press z to begin the ramp. space cuts instantly.\n")
 
     running = True
     try:
@@ -151,9 +120,8 @@ def main():
                 if armed:
                     cut = "manual CUT"
                 armed = False
-                thr = 0.0
+                thr = 0
 
-            # resting height, taken while still disarmed
             if not armed and result is None and est is not None:
                 rest.append(est["pos"][2])
                 if len(rest) > REST_SECONDS * 60:
@@ -163,7 +131,7 @@ def main():
             if armed:
                 if est is None:
                     armed = False
-                    thr = 0.0
+                    thr = 0
                     cut = "TRACKING LOST"
                 else:
                     z, vz = est["pos"][2], est["vel"][2]
@@ -172,25 +140,25 @@ def main():
                         armed = False
                     elif thr >= cap:
                         armed = False
-                        thr = 0.0
+                        thr = 0
                         cut = f"reached throttle_cap {cap} without lifting"
                     elif now - t_arm > TIMEOUT_S:
                         armed = False
-                        thr = 0.0
+                        thr = 0
                         cut = "timed out"
                     else:
                         thr = min(thr + RAMP_RATE * step, cap)
 
-            if not armed and thr > 0.0:       # ease off after a result or a cut
-                thr = max(0.0, thr - step / RAMP_DOWN_S)
+            if not armed and thr > 0:
+                thr = max(0, thr - step / RAMP_DOWN_S)
 
-            link.send(armed or thr > 0.0, 0.0, 0.0, 0.0, thr)
+            link.send(armed or thr > 0, 0, 0, 0, thr)
             telem = link.poll()
 
-            if result is not None and thr <= 0.0:
+            if result is not None and thr <= 0:
                 running = False
 
-            banner, colour = (("RAMPING", (40, 200, 90)) if armed else
+            banner, color = (("RAMPING", (40, 200, 90)) if armed else
                               ("MEASURED", (40, 200, 90)) if result else
                               ("READY", (150, 150, 150)))
             lines = [
@@ -209,7 +177,7 @@ def main():
                 lines.append("note     : %s" % cut)
             if telem:
                 lines.append("FC arming: %s" % decode_arm_flags(telem[7]))
-            hud(lines, banner, colour)
+            hud(lines, banner, color)
     finally:
         link.disarm_burst()
         tracker.close()
@@ -219,16 +187,10 @@ def main():
         print("no measurement taken." + (f" ({cut})" if cut else ""))
         return 1
     print(f"\nhover_ff measured at {result:.4f}")
-    if args.dry_run:
-        print("--dry-run, drone.json not written")
-        return 0
     old, path = apply_hover_ff(args.config, result)
     print(f"hover_ff {old} -> {result:.4f}  written to {path}"
           f"  (backup at {path.name}.bak)")
-    print("Ground effect makes this a slight under-estimate; the flight loop "
-          "trims it the rest of the way.")
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
