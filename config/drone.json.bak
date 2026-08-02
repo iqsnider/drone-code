@@ -1,26 +1,26 @@
 {
   "led_body": [
     [
-      -0.06126,
-      0.00037,
-      0.05192
+      -0.06025,
+      0.00265,
+      0.05302
     ],
     [
-      0.02534,
-      0.08824,
-      0.03876
+      0.03215,
+      0.08466,
+      0.0416
     ],
     [
-      0.0031,
-      -0.06831,
-      0.03912
+      -0.00115,
+      -0.06984,
+      0.03644
     ]
   ],
   "mass_kg": 0.1575,
   "setpoint": [
     0,
     0,
-    0.5
+    0.2
   ],
   "gains": {
     "kp_xy": 6.0,
@@ -30,7 +30,7 @@
     "kd_z": 0.25,
     "ki_z": 0.4,
     "kp_yaw": 1.5,
-    "hover_ff": 0.42,
+    "hover_ff": 0.3,
     "max_tilt_deg": 12.0,
     "throttle_cap": 0.6,
     "i_xy_limit": 3.0,
@@ -62,7 +62,9 @@
     "jerk_pn": 0.08,
     "gate_m": 0.3,
     "alpha": 0.25,
-    "beta": 0.05
+    "beta": 0.05,
+    "shape_tol_m": 0.01,
+    "gate_chi2_pos": 16.27
   },
   "control": {
     "climb_rate": 0.4,
@@ -107,14 +109,14 @@
     "_note": "led_from_datum_mm is the original caliper measurement; led_body is now the rig-measured geometry (see _led_source)"
   },
   "controller": "lqr",
+  "yaw_offset_deg": 0.0,
   "_led_source": {
-    "method": "triangulated from the two-camera rig, 1200 frames",
-    "aligned_to": "the caliper-measured body frame",
-    "residual_mm": 0.17,
-    "repeatability_mm": 0.21,
+    "geometry": "triangulated from the two-camera rig",
+    "frame": "levelled against the drone sitting flat",
+    "note": "orientation now only affects the LED-centroid lever arm; attitude comes from the FC IMU",
     "level_correction_deg": {
-      "roll": -2.135,
-      "pitch": 16.334,
+      "roll": -106.078,
+      "pitch": -1.584,
       "on": "2026-08-01"
     }
   }
