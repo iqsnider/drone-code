@@ -1,0 +1,3 @@
+[submodule "calibrate-ps3eyes"]
+	path = calibrate-ps3eyes
+	url = https://github.com/iqsnider/calibrate-ps3eyes

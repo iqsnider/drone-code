@@ -1,3 +1,5 @@
+"""LQR hover: hold the drone at a setpoint using the camera rig for feedback."""
+
 import argparse
 import json
 import time
@@ -161,8 +163,8 @@ def main():
                     "rpy  deg : %+.1f %+.1f %+.1f" % tuple(est["rpy"]),
                 ]
             else:
-                lines.append("track    : NO ESTIMATE  (blobs %d/%d)"
-                             % tuple(out["blobs"]))
+                lines.append("track    : NO ESTIMATE  (blobs %s)"
+                             % " ".join("%d" % b for b in out["blobs"]))
             lines += [
                 "target m : %+.3f %+.3f %+.3f" % tuple(target),
                 "setpt  m : %+.3f %+.3f %+.3f" % tuple(sp),

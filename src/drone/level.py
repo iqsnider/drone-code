@@ -1,3 +1,5 @@
+"""Level the stored LED body geometry against the drone sitting flat."""
+
 import argparse
 import json
 import shutil
@@ -66,7 +68,8 @@ def main():
     args = ap.parse_args()
 
     print("Place the drone FLAT on the same level surface the ArUco marker sat "
-          "on,\nwith all three LEDs visible to both cameras. Do not hold it.\n")
+          "on,\nwith all three LEDs visible to at least two cameras. Do not "
+          "hold it.\n")
 
     tracker = PoseTracker(args.config)
     tracker.open()
@@ -74,8 +77,8 @@ def main():
         print(f"measuring for {args.seconds:g} s ...")
         got = measure(tracker, args.seconds)
         if got is None:
-            print("\nno usable pose -- check that both cameras see all three "
-                  "LEDs (run the settings calibration if not)")
+            print("\nno usable pose -- check that at least two cameras see all "
+                  "three LEDs (run the settings calibration if not)")
             return 1
         roll, pitch, n, spread = got
         print(f"  samples {n}   roll {roll:+.2f} deg   pitch {pitch:+.2f} deg"

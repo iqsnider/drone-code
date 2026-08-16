@@ -1,3 +1,5 @@
+"""Tune each camera's exposure, gain and blob thresholds until only the LEDs show."""
+
 import argparse
 import json
 from pathlib import Path
@@ -8,8 +10,6 @@ import numpy as np
 from calibration import camera_ids
 
 from pseyepy import Camera
-
-CAMERA_FILES = ["camera0.json", "camera1.json"]
 
 TRACKBARS = [
     ("exposure", "exposure", 255, 1),
@@ -88,17 +88,18 @@ def read_trackbars(n):
     return vals
 
 
-def save_configs(cfgs, cfgdir, tvals):
+def save_configs(cfgs, cfgdir, tvals, names):
     for i, c in enumerate(cfgs):
         for _label, key, _maxv, _scale in TRACKBARS:
             c[key] = round(tvals[i][key], 3) if key == "min_circ" else int(tvals[i][key])
-        path = cfgdir / CAMERA_FILES[i]
+        path = cfgdir / names[i]
         path.write_text(json.dumps(c, indent=2) + "\n")
         print(f"  saved -> {path}")
 
 
 def run(cfgdir):
-    cfgs = [json.loads((cfgdir / n).read_text()) for n in CAMERA_FILES]
+    names = camera_ids.camera_files(cfgdir)
+    cfgs = [json.loads((cfgdir / n).read_text()) for n in names]
     indices = camera_ids.resolve_indices(cfgs)
     cam = open_cameras(cfgs, indices)
     make_windows(cfgs)
@@ -141,7 +142,7 @@ def run(cfgdir):
             elif key == ord("m"):
                 show_mask = not show_mask
             elif key == ord("s"):
-                save_configs(cfgs, cfgdir, tvals)
+                save_configs(cfgs, cfgdir, tvals, names)
     finally:
         cam.end()
         cv2.destroyAllWindows()
@@ -151,7 +152,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     ap.add_argument("--config", type=Path,
                     default=Path(__file__).resolve().parents[2] / "config",
-                    help="directory holding camera0.json and camera1.json")
+                    help="directory holding the cameraN.json files")
     args = ap.parse_args()
 
     print(f"config dir: {args.config}")

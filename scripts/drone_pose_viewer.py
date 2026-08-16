@@ -1,3 +1,5 @@
+"""Live browser view of the tracked drone pose, raw and EKF, over WebSocket."""
+
 import argparse
 import base64
 import hashlib
@@ -12,7 +14,7 @@ from drone.pose import PoseTracker
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
-_latest = {"t": 0, "blobs": [0, 0]}
+_latest = {"t": 0, "blobs": []}
 _lock = threading.Lock()
 
 
@@ -42,6 +44,8 @@ PAGE = """<!doctype html>
   .cell div { color:#777; margin-bottom:4px; }
   canvas { background:#181818; border:1px solid #333; display:block;
            touch-action:none; }
+  img.cam { background:#181818; border:1px solid #333; display:block;
+            width:300px; height:225px; }
   #read { padding:16px; white-space:pre; line-height:1.65; }
   .warn { color:#e55; }
 </style>
@@ -60,10 +64,21 @@ PAGE = """<!doctype html>
   <div class="cell"><div>3D &nbsp; drag to orbit</div><canvas id="est3d" width="300" height="300"></canvas></div>
 </div>
 
+<h2>camera views &nbsp;<span style="color:#3c3">&#9679;</span></h2>
+<div class="row" id="cams"></div>
+
 <div id="read">connecting...</div>
 <script>
-const EXTENT = 1.5;                      // meters shown from the origin
+let EXTENT = 1.5;                        // meters shown from the origin
 let msg = null, lastRx = 0;
+
+function fitExtent() {                   // grow the frame so the cameras fit in it
+  let m = 1.5;
+  if (msg && msg.cams)
+    for (const C of msg.cams)
+      m = Math.max(m, Math.abs(C[0]), Math.abs(C[1]), Math.abs(C[2]));
+  EXTENT = Math.ceil(m / 0.5) * 0.5;
+}
 let az = -0.9, el = 0.9;                 // shared orbit for both 3D views
 
 function rotFromRpy(rpy) {               // ZYX, degrees -> body->world matrix
@@ -102,10 +117,12 @@ function draw2D(cv, po, hAxis, vAxis, floor, col) {
   g.strokeStyle="#3c3"; g.beginPath(); g.moveTo(px(0),py(0)); g.lineTo(px(0),py(0.3)); g.stroke();
 
   if (msg && msg.cams) {                 // where the cameras sit
-    g.fillStyle = "#456";
-    for (const C of msg.cams) {
+    g.fillStyle = "#9ab";
+    g.font = "10px ui-monospace,monospace";
+    msg.cams.forEach((C, i) => {
       g.fillRect(px(C[hAxis])-3, py(C[vAxis])-3, 6, 6);
-    }
+      g.fillText(i, px(C[hAxis])+6, py(C[vAxis])+3);
+    });
   }
   if (!po || !po.pos) return;
   const h = po.pos[hAxis], v = po.pos[vAxis];
@@ -149,10 +166,12 @@ function draw3D(cv, po, col) {
   g.lineWidth = 1;
 
   if (msg && msg.cams) {
-    g.fillStyle = "#456";
-    for (const C of msg.cams) { const A = proj(C);
+    g.fillStyle = "#9ab";
+    g.font = "10px ui-monospace,monospace";
+    msg.cams.forEach((C, i) => { const A = proj(C);
       g.fillRect(A[0]-3, A[1]-3, 6, 6);
-      g.strokeStyle="#333"; line(C, [C[0],C[1],0]); }
+      g.fillText(i, A[0]+6, A[1]+3);
+      g.strokeStyle="#333"; line(C, [C[0],C[1],0]); });
   }
   if (!po || !po.pos) return;
 
@@ -193,10 +212,30 @@ for (const id of ["raw3d","est3d"]) {
   cv.addEventListener("pointerup", () => { drag = null; });
 }
 
+// ---- camera panels ------------------------------------------------------
+function renderViews() {
+  const row = document.getElementById("cams");
+  const views = (msg && msg.views) || [];
+  if (row.childElementCount !== views.length) {     // build once, then reuse
+    row.innerHTML = views.map((_, i) =>
+      `<div class="cell"><div id="cl${i}">cam ${i}</div>` +
+      `<img class="cam" id="cv${i}"></div>`).join("");
+  }
+  views.forEach((b64, i) => {
+    document.getElementById("cv" + i).src = "data:image/jpeg;base64," + b64;
+    const n = msg.blobs[i], lab = document.getElementById("cl" + i);
+    const used = msg.raw && msg.raw.used && msg.raw.used.includes(i);
+    lab.textContent = `cam ${i}   blobs ${n}/3` + (used ? "   in fix" : "");
+    lab.style.color = n >= 3 ? "#3c3" : "#e55";
+  });
+}
+
 // ---- render loop --------------------------------------------------------
 const f = v => (v >= 0 ? "+" : "") + v.toFixed(3);
 
 function render() {
+  fitExtent();
+  renderViews();
   const raw = msg && msg.raw, est = msg && msg.est;
   const rawCol = (raw && raw.ok) ? "#fa0" : "#e55";
   const estCol = (est && est.coasting) ? "#fa0" : "#3cf";
@@ -213,14 +252,16 @@ function render() {
   const stale = (Date.now() - lastRx) / 1000 > 1;
   el_.className = stale ? "warn" : "";
 
-  let s = `blobs      cam0 ${msg.blobs[0]}/3   cam1 ${msg.blobs[1]}/3` +
+  let s = "blobs      " +
+          (msg.blobs || []).map((b, i) => `cam${i} ${b}/3`).join("   ") +
           (stale ? "     [feed stale]" : "") + "\\n\\n";
   s += raw && raw.pos
     ? `raw   pos  ${f(raw.pos[0])} ${f(raw.pos[1])} ${f(raw.pos[2])} m` +
       `   rpy ${f(raw.rpy[0])} ${f(raw.rpy[1])} ${f(raw.rpy[2])} deg\\n` +
       `      fit  rmsd ${(raw.rmsd*1000).toFixed(1)} mm   reproj ${raw.reproj.toFixed(2)} px` +
+      `   from cam ${raw.used.join(",")}` +
       (raw.ok ? "" : "   <- rejected, LED triangle does not fit") + "\\n"
-    : "raw   no pose -- need 3 blobs in both cameras\\n";
+    : "raw   no pose -- need 3 blobs in at least 2 cameras\\n";
   s += "\\n";
   s += est
     ? `EKF   pos  ${f(est.pos[0])} ${f(est.pos[1])} ${f(est.pos[2])} m` +
@@ -300,7 +341,7 @@ def main():
                     help="WebSocket push rate")
     args = ap.parse_args()
 
-    tracker = PoseTracker(args.config)
+    tracker = PoseTracker(args.config, preview=True)
     tracker.open()
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)

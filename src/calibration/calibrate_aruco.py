@@ -12,11 +12,10 @@ from calibration import camera_ids
 # project files
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 CONFIG_DIR = PROJECT_DIR / "config"
-CAMERA_FILES = ["camera0.json", "camera1.json"]
 
 # marker info
-MARKER_ID = 241
-MARKER_EDGE_LENGTH = 0.15 # [m]
+MARKER_ID = 227
+MARKER_EDGE_LENGTH = 0.16 # [m]
 ARUCO_DICT_NAME = "DICT_4X4_250"
 
 # camera detection settings
@@ -39,10 +38,10 @@ def resolve_config_dir():
     Finds the config directory where all of the important info on the cameras is stored
     """
     for c in [CONFIG_DIR, Path.cwd() / "config"]:
-        if c.is_dir() and all((c / n).is_file() for n in CAMERA_FILES):
+        if c.is_dir() and len(camera_ids.camera_files(c)) >= 2:
             return c
-    raise SystemExit("could not find " + " and ".join(CAMERA_FILES)
-                     + f" in {CONFIG_DIR} or {Path.cwd() / 'config'}")
+    raise SystemExit("could not find at least two cameraN.json files in "
+                     f"{CONFIG_DIR} or {Path.cwd() / 'config'}")
 
 
 
@@ -277,6 +276,11 @@ def locate_camera(cfg_path, detect, index):
             cv2.destroyWindow(win)
 
 
+    if len(samples) < MIN_SAMPLES:
+        raise SystemExit(f"{Path(cfg_path).name}: only {len(samples)} sightings "
+                         f"of marker {MARKER_ID} (need {MIN_SAMPLES}) -- move the "
+                         f"marker so this camera can see it")
+
     stack = np.stack(samples)
     img_pts = np.median(stack, axis=0)
 
@@ -306,15 +310,17 @@ def main():
     config_dir = resolve_config_dir()
 
     # open the configs for each camera
-    cfgs = [json.loads((config_dir / n).read_text()) for n in CAMERA_FILES]
+    names = camera_ids.camera_files(config_dir)
+    cfgs = [json.loads((config_dir / n).read_text()) for n in names]
     indices = camera_ids.resolve_indices(cfgs)
 
     # make the detector
     detect = make_detect_fn()
 
     # start collection pose reults
+    print(f"locating {len(names)} cameras against marker {MARKER_ID}")
     results = []
-    for name, index in zip(CAMERA_FILES, indices):
+    for name, index in zip(names, indices):
         path = config_dir / name
         results.append((path, *locate_camera(path, detect, index)))
 

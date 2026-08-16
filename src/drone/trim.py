@@ -1,3 +1,5 @@
+"""Measure the hover throttle by ramping up until the drone just leaves the ground."""
+
 import argparse
 import json
 import shutil

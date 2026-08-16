@@ -1,14 +1,26 @@
 import ctypes
 import json
+import sys
 from pathlib import Path
 
 import pseyepy
 from pseyepy import Camera, cam_count
 
-CAMERA_FILES = ["camera0.json", "camera1.json"]
 IDENT_MAX = 64
 
+
+def camera_files(cfgdir):
+    """
+    The camera configs present in cfgdir, in slot order: camera0.json first.
+
+    This is the single source of truth for how many cameras the rig has --
+    drop in a camera4.json and everything downstream picks it up.
+    """
+    return sorted(p.name for p in Path(cfgdir).glob("camera[0-9].json"))
+
+
 _lib_cache = None
+
 
 def _lib():
     global _lib_cache
@@ -73,6 +85,12 @@ def resolve_indices(cam_cfg, verbose=True):
             ids.append(fb)
         elif want in found:
             ids.append(found[want])
+        else:
+            # keep the slot aligned: a short list would silently shift every
+            # camera after this one onto the wrong config
+            print(f"  ** camera{slot}: USB port {want} not connected, falling "
+                  f"back to index {fb}")
+            ids.append(fb)
 
     if verbose:
         for slot, (want, i) in enumerate(zip(wanted, ids)):
@@ -86,7 +104,7 @@ def _find_config_dir(explicit=None):
         Path.cwd() / "config",
     ]
     for c in candidates:
-        if c.is_dir() and all((c / n).is_file() for n in CAMERA_FILES):
+        if c.is_dir() and len(camera_files(c)) >= 2:
             return c
 
 
@@ -102,13 +120,14 @@ def _to_gray(frame):
 
 
 def report(cfgdir):
-    cfgs = [json.loads((cfgdir / n).read_text()) for n in CAMERA_FILES]
+    names = camera_files(cfgdir)
+    cfgs = [json.loads((cfgdir / n).read_text()) for n in names]
     found = probe_ports()
     print(f"\nconnected cameras ({len(found)}):")
     for p, i in sorted(found.items(), key=lambda kv: kv[1]):
         print(f"  index {i}  USB port {p}")
-    print("\nconfig:")
-    for name, cfg in zip(CAMERA_FILES, cfgs):
+    print(f"\nconfig ({len(names)} cameras):")
+    for name, cfg in zip(names, cfgs):
         rec = cfg.get("usb_port")
         if rec is None:
             print(f"  {name}: no usb_port recorded, index field says "
@@ -125,10 +144,14 @@ def report(cfgdir):
 
 
 def record(cfgdir, no_preview=False):
-    cfgs = [json.loads((cfgdir / n).read_text()) for n in CAMERA_FILES]
+    names = camera_files(cfgdir)
+    cfgs = [json.loads((cfgdir / n).read_text()) for n in names]
 
     found = probe_ports()
     by_index = {i: p for p, i in found.items()}
+    if len(by_index) != len(names):
+        raise SystemExit(f"{len(names)} camera configs but {len(by_index)} "
+                         f"cameras connected -- plug them all in first")
 
     order = [int(c["index"]) for c in cfgs]
     if sorted(order) != sorted(by_index):
@@ -141,11 +164,12 @@ def record(cfgdir, no_preview=False):
     else:
         import cv2
         cam = Camera(order, fps=60, resolution=Camera.RES_LARGE, colour=False)
-        wins = [f"{n}  (slot {i})" for i, n in enumerate(CAMERA_FILES)]
+        wins = [f"{n}  (slot {i})" for i, n in enumerate(names)]
         print("\nBlock one camera with your hand to tell them apart.")
-        print("  s     swap the two assignments")
+        print(f"  0-{len(names) - 1}   press two slot numbers to swap them")
         print("  enter accept and write usb_port into the configs")
         print("  esc   cancel without writing")
+        sel = None
         try:
             for w in wins:
                 cv2.namedWindow(w, cv2.WINDOW_NORMAL)
@@ -156,24 +180,36 @@ def record(cfgdir, no_preview=False):
                 for slot, (w, f) in enumerate(zip(wins, frames)):
                     vis = cv2.cvtColor(_to_gray(f), cv2.COLOR_GRAY2BGR)
                     idx = order[slot]
-                    cv2.putText(vis, f"-> {CAMERA_FILES[slot]}", (8, 24),
+                    tag = f"-> {names[slot]}" + ("  [SELECTED]" if sel == slot else "")
+                    cv2.putText(vis, tag, (8, 24),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                    cv2.putText(vis, f"index {idx}  port {by_index[idx]}",
+                    cv2.putText(vis, f"slot {slot}  index {idx}  port {by_index[idx]}",
                                 (8, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                                 (0, 255, 255), 1)
                     cv2.imshow(w, vis)
                 k = cv2.waitKey(1) & 0xFF
                 if k in (13, 10):                     # enter
                     break
-                if k in (ord("s"), ord("S")):
-                    order.reverse()
-                    print(f"swapped -> {CAMERA_FILES[0]} is index {order[0]}, "
-                          f"{CAMERA_FILES[1]} is index {order[1]}")
+                if k == 27:                           # esc
+                    raise KeyboardInterrupt("cancelled, nothing written")
+                if ord("0") <= k <= ord("9"):
+                    slot = k - ord("0")
+                    if slot >= len(names):
+                        continue
+                    if sel is None:
+                        sel = slot
+                        print(f"slot {slot} ({names[slot]}) selected -- press "
+                              f"another slot number to swap")
+                    else:
+                        order[sel], order[slot] = order[slot], order[sel]
+                        print(f"swapped -> {names[sel]} is index {order[sel]}, "
+                              f"{names[slot]} is index {order[slot]}")
+                        sel = None
         finally:
             cam.end()
             cv2.destroyAllWindows()
 
-    for name, cfg, idx in zip(CAMERA_FILES, cfgs, order):
+    for name, cfg, idx in zip(names, cfgs, order):
         cfg["usb_port"] = by_index[idx]
         cfg["index"] = idx                # kept as the no-usb_port fallback
         path = cfgdir / name
@@ -185,7 +221,10 @@ def record(cfgdir, no_preview=False):
 
 def main():
     cfgdir = _find_config_dir()
-    report(cfgdir)
+    if "--record" in sys.argv:
+        record(cfgdir, no_preview="--no-preview" in sys.argv)
+    else:
+        report(cfgdir)
 
 
 if __name__ == "__main__":
