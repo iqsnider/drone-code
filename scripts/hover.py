@@ -111,20 +111,16 @@ def main():
                 if tracking:
                     loss_t0 = None
                     pos = np.array(est["pos"], float)
-                    if np.linalg.norm(pos - target) > ctl["geofence_m"]:
-                        armed = engaged = False
-                        cut_reason = "GEOFENCE"
-                    else:
-                        # walk the setpoint to the target so engaging never
-                        # applies a step the loop has to chase
-                        delta = target - sp
-                        span = np.linalg.norm(delta)
-                        move = ctl["climb_rate"] * step
-                        sp = target.copy() if span <= move else sp + delta / span * move
-                        roll, pitch, yaw_cmd, throttle = controller(
-                            pos, est["vel"], np.radians(est["rpy"][2]),
-                            sp, yaw_sp, step, integrate=True)
-                        last_thr = throttle
+                    # walk the setpoint to the target so engaging never
+                    # applies a step the loop has to chase
+                    delta = target - sp
+                    span = np.linalg.norm(delta)
+                    move = ctl["climb_rate"] * step
+                    sp = target.copy() if span <= move else sp + delta / span * move
+                    roll, pitch, yaw_cmd, throttle = controller(
+                        pos, est["vel"], np.radians(est["rpy"][2]),
+                        sp, yaw_sp, step, integrate=True)
+                    last_thr = throttle
                 else:
                     # tracking lost: level the aircraft, ease the throttle off,
                     # then disarm. Better a controlled sink than a blind hover.

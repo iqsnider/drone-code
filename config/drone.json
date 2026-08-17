@@ -71,8 +71,7 @@
     "loss_grace_s": 0.25,
     "loss_ramp_s": 1.0,
     "reject_rmsd_m": 0.008,
-    "send_hz": 100,
-    "geofence_m": 0.6
+    "send_hz": 100
   },
   "esp_ip": "192.168.4.1",
   "_physical": {
