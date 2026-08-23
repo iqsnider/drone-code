@@ -24,7 +24,9 @@ def decode_arm_flags(flags):
     if flags == 0xFFFFFFFF:
         return "(no reply yet)"
     names = [n for i, n in enumerate(ARM_FLAG_NAMES) if flags & (1 << i)]
-    return ", ".join(names) or f"0x{flags:08x}"
+    label = ", ".join(names) or f"0x{flags:08x}"
+
+    return label
 
 
 class Link:
@@ -54,6 +56,7 @@ class Link:
                     self.telem = struct.unpack(TELEM_FMT, data[:TELEM_SIZE])
         except (BlockingIOError, OSError):
             pass
+
         return self.telem
 
     def disarm_burst(self, n=10):

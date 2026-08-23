@@ -6,7 +6,7 @@ def expm(M, terms=18):
     M = np.asarray(M, float)
     norm = np.abs(M).sum(axis=1).max()
     s = max(0, int(np.ceil(np.log2(norm))) + 1) if norm > 0 else 0
-    Ms = M / (2.0 ** s)
+    Ms = M / (2 ** s)
     E = np.eye(len(M))
     T = np.eye(len(M))
     for k in range(1, terms + 1):
@@ -14,6 +14,7 @@ def expm(M, terms=18):
         E = E + T
     for _ in range(s):
         E = E @ E
+
     return E
 
 
@@ -25,7 +26,9 @@ def discretize(A, B, dt):
     M[:n, :n] = A * dt
     M[:n, n:] = B * dt
     E = expm(M)
-    return E[:n, :n], E[:n, n:]
+    Ad, Bd = E[:n, :n], E[:n, n:]
+
+    return Ad, Bd
 
 
 def dlqr(A, B, Q, R, iters=10000, tol=1e-14):
@@ -39,6 +42,7 @@ def dlqr(A, B, Q, R, iters=10000, tol=1e-14):
             P = P_next
             break
         P = P_next
+
     return K, P
 
 
@@ -48,7 +52,9 @@ def axis_system(tau, dt):
                   [0, 0, 0, 1],
                   [0, 0, 0, -1 / tau]])
     B = np.array([[0], [0], [0], [1 / tau]])
-    return discretize(A, B, dt)
+    Ad, Bd = discretize(A, B, dt)
+
+    return Ad, Bd
 
 
 def _axis_gain(tau, dt, int_max, pos_max, vel_max, acc_max, effort):
@@ -57,11 +63,15 @@ def _axis_gain(tau, dt, int_max, pos_max, vel_max, acc_max, effort):
                  1 / vel_max ** 2, 1 / acc_max ** 2])
     R = np.array([[(effort ** 2) / acc_max ** 2]])
     K, _ = dlqr(Ad, Bd, Q, R)
-    return K.ravel(), Ad, Bd
+    K = K.ravel()
+
+    return K, Ad, Bd
 
 
 def wrap_pi(a):
-    return (a + np.pi) % (2 * np.pi) - np.pi
+    wrapped = (a + np.pi) % (2 * np.pi) - np.pi
+
+    return wrapped
 
 
 class LQRHover:
@@ -75,9 +85,9 @@ class LQRHover:
         self.thr_cap = float(g["throttle_cap"])
         self.thr_max = float(q["thr_max"])
         self.kp_yaw = float(g["kp_yaw"])
-        self.s_roll = float(g.get("sign_roll", 1.0))
-        self.s_pitch = float(g.get("sign_pitch", 1.0))
-        self.s_yaw = float(g.get("sign_yaw", 1.0))
+        self.s_roll = float(g.get("sign_roll", 1))
+        self.s_pitch = float(g.get("sign_pitch", 1))
+        self.s_yaw = float(g.get("sign_yaw", 1))
 
         lat = float(q["latency_s"])
         self.tau_xy = float(q["tau_att_s"]) + lat
@@ -159,5 +169,7 @@ class LQRHover:
         return roll, pitch, 0, thr
 
     def closed_loop_poles(self):
-        return (np.linalg.eigvals(self.Ad_xy - self.Bd_xy @ self.Kxy[None, :]),
-                np.linalg.eigvals(self.Ad_z - self.Bd_z @ self.Kz[None, :]))
+        poles_xy = np.linalg.eigvals(self.Ad_xy - self.Bd_xy @ self.Kxy[None, :])
+        poles_z = np.linalg.eigvals(self.Ad_z - self.Bd_z @ self.Kz[None, :])
+
+        return poles_xy, poles_z

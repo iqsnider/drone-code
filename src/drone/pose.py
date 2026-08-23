@@ -32,47 +32,57 @@ class CameraModel:
         self.P = self.K @ np.hstack([self.R, self.t[:, None]])
 
     def undistort(self, pts):
-        """Pixel points -> ideal pinhole pixel points for this camera."""
+        """
+        Pixel points -> ideal pinhole pixel points for this camera.
+        """
         pts = np.asarray(pts, float).reshape(-1, 1, 2)
-        return cv2.undistortPoints(pts, self.K, self.dist, P=self.K).reshape(-1, 2)
+        ideal = cv2.undistortPoints(pts, self.K, self.dist, P=self.K).reshape(-1, 2)
+
+        return ideal
 
     def project(self, Xw):
         Xw = np.atleast_2d(np.asarray(Xw, float))
         uv = (self.P @ np.hstack([Xw, np.ones((len(Xw), 1))]).T).T
-        return uv[:, :2] / uv[:, 2:3]
+        px = uv[:, :2] / uv[:, 2:3]
+
+        return px
 
 
 def triangulate(models, uvs):
     """
-    Least-squares 3D point from N >= 2 views (homogeneous DLT).
-
-    Each view contributes two rows saying "the ray through this pixel passes
-    through X"; the null space of the stack is the point that best satisfies
-    all of them at once.
+    Least-squares 3D point from N >= 2 views (homogeneous DLT). Each view
+    contributes two rows saying "the ray through this pixel passes through X";
+    the null space of the stack is the point that best satisfies all of them
+    at once.
     """
     A = np.empty((2 * len(models), 4))
     for i, (m, (u, v)) in enumerate(zip(models, uvs)):
         A[2 * i] = u * m.P[2] - m.P[0]
         A[2 * i + 1] = v * m.P[2] - m.P[1]
     X = np.linalg.svd(A)[2][-1]
-    return X[:3] / X[3]
+    point = X[:3] / X[3]
+
+    return point
 
 
 def _best_perm(cost):
-    """Assignment that minimises cost[i, perm[i]], brute forced over N_LEDS!."""
+    """
+    Assignment that minimizes cost[i, perm[i]], brute forced over N_LEDS!.
+    """
     n = len(cost)
-    return min(permutations(range(n)),
-               key=lambda p: sum(cost[i, p[i]] for i in range(n)))
+    perm = min(permutations(range(n)),
+              key=lambda p: sum(cost[i, p[i]] for i in range(n)))
+
+    return perm
 
 
 def match_views(models, uvs):
     """
-    Label every camera's blobs consistently, then triangulate from all of them.
-
-    The first view fixes the LED labelling. The second is matched to it by
-    brute force -- the only pairing we have no 3D prior for -- and the rest are
-    matched by reprojecting the resulting points, which costs one projection
-    per view instead of a joint search over every view at once.
+    Label every camera's blobs consistently, then triangulate from all of
+    them. The first view fixes the labeling, the second is matched to it by
+    brute force, and the rest are matched by reprojecting the resulting
+    points, one projection per view instead of a joint search over all of
+    them at once.
     """
     ref = uvs[0]
     n = len(ref)
@@ -103,7 +113,9 @@ def match_views(models, uvs):
 
     err = sum(np.linalg.norm(m.project(world[k])[0] - o[k])
               for m, o in zip(models, ordered) for k in range(n))
-    return world, err / (n * len(models))
+    reproj = err / (n * len(models))
+
+    return world, reproj
 
 
 def kabsch(B, W):
@@ -113,10 +125,12 @@ def kabsch(B, W):
     bc, wc = B.mean(0), W.mean(0)
     U, _, Vt = np.linalg.svd((B - bc).T @ (W - wc))
     d = np.sign(np.linalg.det(Vt.T @ U.T))
-    R = Vt.T @ np.diag([1.0, 1.0, d]) @ U.T
+    R = Vt.T @ np.diag([1, 1, d]) @ U.T
     p = wc - R @ bc
     resid = W - ((R @ B.T).T + p)
-    return R, p, float(np.sqrt(np.mean(np.sum(resid ** 2, axis=1))))
+    rmsd = float(np.sqrt(np.mean(np.sum(resid ** 2, axis=1))))
+
+    return R, p, rmsd
 
 
 def identify_and_pose(world_pts, led_body):
@@ -125,15 +139,20 @@ def identify_and_pose(world_pts, led_body):
         R, p, rmsd = kabsch(led_body, world_pts[list(perm)])
         if best is None or rmsd < best[2]:
             best = (R, p, rmsd)
+
     return best
 
 
 def rpy_deg(R_bw):
-    """Roll/pitch/yaw in degrees, ZYX convention, from a body->world rotation."""
+    """
+    Roll/pitch/yaw in degrees, ZYX convention, from a body->world rotation.
+    """
     yaw = np.arctan2(R_bw[1, 0], R_bw[0, 0])
     pitch = np.arctan2(-R_bw[2, 0], np.hypot(R_bw[2, 1], R_bw[2, 2]))
     roll = np.arctan2(R_bw[2, 1], R_bw[2, 2])
-    return [float(np.degrees(a)) for a in (roll, pitch, yaw)]
+    rpy = [float(np.degrees(a)) for a in (roll, pitch, yaw)]
+
+    return rpy
 
 
 class PoseTracker:
@@ -145,20 +164,13 @@ class PoseTracker:
         names = camera_ids.camera_files(cfgdir)
         self.cam_cfg = [json.loads((cfgdir / n).read_text()) for n in names]
 
-        uncalibrated = [n for n, c in zip(names, self.cam_cfg)
-                        if "extrinsics" not in c]
-        if uncalibrated:
-            raise SystemExit(
-                "no extrinsics for " + ", ".join(uncalibrated) +
-                " -- run scripts/run_camera_pose_calibration.py first")
-
         self.drone = json.loads((cfgdir / "drone.json").read_text())
         self.models = [CameraModel(c) for c in self.cam_cfg]
 
         # pairwise camera separations, used to pick the stereo pair that
         # bootstraps LED correspondence each frame
-        centres = np.array([m.C for m in self.models])
-        self.baseline = np.linalg.norm(centres[:, None, :] - centres[None, :, :],
+        centers = np.array([m.C for m in self.models])
+        self.baseline = np.linalg.norm(centers[:, None, :] - centers[None, :, :],
                                        axis=2)
         self.led_body = np.asarray(self.drone["led_body"], float)
 
@@ -189,7 +201,7 @@ class PoseTracker:
         # match_views bootstraps correspondence from the first two cameras it is
         # given, so lead with the widest-separated pair. Across a short baseline
         # several LED pairings reproject almost equally well and the wrong one
-        # wins, triangulating ghost points -- on this rig that doubled the
+        # wins, triangulating ghost points; on this rig that doubled the
         # apparent size of the LED triangle on ~80% of frames.
         a, b = max(combinations(use, 2), key=lambda p: self.baseline[p])
         order = [a, b] + [i for i in use if i not in (a, b)]
@@ -198,15 +210,16 @@ class PoseTracker:
         uvs = [self.models[i].undistort(dets[i][:N_LEDS]) for i in order]
         world, reproj = match_views(models, uvs)
         R, p, rmsd = identify_and_pose(world, self.led_body)
+        pose = {"pos": p.tolist(), "R": R.tolist(), "rpy": rpy_deg(R),
+               "leds": world.tolist(), "rmsd": float(rmsd),
+               "reproj": float(reproj), "used": sorted(order),
+               "ok": bool(rmsd <= self.init_rmsd)}
 
-        return {"pos": p.tolist(), "R": R.tolist(), "rpy": rpy_deg(R),
-                "leds": world.tolist(), "rmsd": float(rmsd),
-                "reproj": float(reproj), "used": sorted(order),
-                "ok": bool(rmsd <= self.init_rmsd)}
+        return pose
 
     def _preview(self, gray, pts):
-        """One camera's frame as base64 JPEG, with its detected blobs ringed.
-
+        """
+        One camera's frame as base64 JPEG, with its detected blobs ringed.
         Resized before drawing so the markers stay crisp at panel size rather
         than being softened by the downscale.
         """
@@ -219,7 +232,9 @@ class PoseTracker:
             cv2.circle(vis, (int(x * sx), int(y * sy)), 7, (0, 255, 0), 1)
         _, buf = cv2.imencode(".jpg", vis,
                               [cv2.IMWRITE_JPEG_QUALITY, PREVIEW_QUALITY])
-        return base64.b64encode(buf).decode()
+        jpeg_b64 = base64.b64encode(buf).decode()
+
+        return jpeg_b64
 
     def read(self):
         grays = read_grays(self.cam)
@@ -228,7 +243,7 @@ class PoseTracker:
         raw = self.estimate(dets)
 
         now = time.time()
-        dt = (now - self._last_t) if self._last_t is not None else 0.0
+        dt = (now - self._last_t) if self._last_t is not None else 0
         self._last_t = now
         self.ekf.predict(dt)
 

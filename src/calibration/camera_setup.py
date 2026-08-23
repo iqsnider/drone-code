@@ -1,15 +1,15 @@
-"""Tune each camera's exposure, gain and blob thresholds until only the LEDs show."""
-
-import argparse
 import json
 from pathlib import Path
 
 import cv2
 import numpy as np
+import typer
 
 from calibration import camera_ids
 
 from pseyepy import Camera
+
+DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "config"
 
 TRACKBARS = [
     ("exposure", "exposure", 255, 1),
@@ -35,7 +35,7 @@ def detect_centroids(gray, cfg, max_n=3):
         perim = cv2.arcLength(c, True)
         if perim <= 0:
             continue
-        if 4.0 * np.pi * area / (perim * perim) < cfg["min_circ"]:
+        if 4 * np.pi * area / (perim * perim) < cfg["min_circ"]:
             continue
         M = cv2.moments(c)
         if M["m00"] <= 0:
@@ -48,7 +48,9 @@ def detect_centroids(gray, cfg, max_n=3):
         out.append((cx, cy, inten))
 
     out.sort(key=lambda t: -t[2])
-    return [(cx, cy) for cx, cy, _ in out[:max_n]], mask
+    points = [(cx, cy) for cx, cy, _ in out[:max_n]]
+
+    return points, mask
 
 
 def open_cameras(cfgs, indices):
@@ -60,12 +62,15 @@ def open_cameras(cfgs, indices):
     for i, c in enumerate(cfgs):
         cam.exposure[i] = int(c["exposure"])
         cam.gain[i] = int(c["gain"])
+
     return cam
 
 
 def read_grays(cam):
     frames, _ = cam.read(squeeze=False)
-    return [np.asarray(f) for f in frames]
+    grays = [np.asarray(f) for f in frames]
+
+    return grays
 
 
 def make_windows(cfgs):
@@ -148,16 +153,15 @@ def run(cfgdir):
         cv2.destroyAllWindows()
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
-    ap.add_argument("--config", type=Path,
-                    default=Path(__file__).resolve().parents[2] / "config",
-                    help="directory holding the cameraN.json files")
-    args = ap.parse_args()
-
-    print(f"config dir: {args.config}")
-    run(args.config)
+def main(
+    config: Path = typer.Option(DEFAULT_CONFIG, help="directory holding the cameraN.json files"),
+):
+    """
+    Tune each camera's exposure, gain and blob thresholds until only the LEDs show.
+    """
+    print(f"config dir: {config}")
+    run(config)
 
 
 if __name__ == "__main__":
-    main()
+    typer.run(main)

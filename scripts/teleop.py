@@ -1,16 +1,8 @@
-"""
-Connect PC to ESP32's WiFi network ("drone-shakeout")
-"""
-
 import socket
 import struct
-import sys
 import time
 
-try:
-    import pygame
-except ImportError:
-    sys.exit("pygame required:  uv add pygame   (or pip install pygame)")
+import pygame
 
 ESP_IP = "192.168.4.1"
 CMD_PORT = 9000
@@ -40,7 +32,9 @@ def decode_arm_flags(flags):
         return "(no status yet)"
     names = [ARM_FLAG_NAMES[i] if i < len(ARM_FLAG_NAMES) else "BIT%d" % i
              for i in range(32) if flags & (1 << i)]
-    return ", ".join(names) if names else "0x%08X" % flags
+    label = ", ".join(names) if names else "0x%08X" % flags
+
+    return label
 
 
 MAX_ANGLE_DEG = 25
@@ -54,10 +48,13 @@ THROTTLE_MAX = 0.55
 def approach(value, target, rate, dt):
     step = rate * dt
     if value < target:
-        return min(value + step, target)
-    if value > target:
-        return max(value - step, target)
-    return value
+        approached = min(value + step, target)
+    elif value > target:
+        approached = max(value - step, target)
+    else:
+        approached = value
+
+    return approached
 
 
 class TeleopState:
@@ -74,7 +71,7 @@ class TeleopState:
             roll_target -= MAX_ANGLE_DEG
         if keys[pygame.K_RIGHT]:
             roll_target += MAX_ANGLE_DEG
-        pitch_target = 0.0
+        pitch_target = 0
         if keys[pygame.K_UP]:
             pitch_target += MAX_ANGLE_DEG
         if keys[pygame.K_DOWN]:
@@ -104,7 +101,7 @@ class TeleopState:
 def main():
     pygame.init()
     screen = pygame.display.set_mode((640, 400), pygame.RESIZABLE)
-    pygame.display.set_caption("drone teleop -- z arms/disarms")
+    pygame.display.set_caption("drone teleop (z arms/disarms)")
     font = pygame.font.SysFont("menlo,consolas,monospace", 18)
     big = pygame.font.SysFont("menlo,consolas,monospace", 34, bold=True)
     clock = pygame.time.Clock()
@@ -208,7 +205,7 @@ def _draw(screen, font, big, st, arm, telem):
         lines.append("esp loop : %d us max" % telem[6])
         lines.append("FC arming: %s" % decode_arm_flags(telem[7]))
     else:
-        lines.append("esp loop : (no telemetry -- check wifi)")
+        lines.append("esp loop : (no telemetry, check wifi)")
         lines.append("FC arming: (no telemetry)")
 
     line_h = font.get_linesize() + 8

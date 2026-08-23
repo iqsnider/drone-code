@@ -1,4 +1,6 @@
+import typer
+
 from drone.trim import main
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    typer.run(main)

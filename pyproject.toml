@@ -10,6 +10,7 @@ dependencies = [
     "opencv-python>=5.0.0.93",
     "pseyepy",
     "pygame>=2.6.1",
+    "typer>=0.15.1",
 ]
 
 [build-system]

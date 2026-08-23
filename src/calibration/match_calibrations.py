@@ -1,21 +1,3 @@
-"""Bind each calibration to a physical camera by covering it with your hand.
-
-The calibration pipeline in `calibrate-ps3eyes/` writes one `cameraN.json` per
-*pseyepy device index*, and that index is just USB enumeration order -- it is
-not attached to a physical camera and can renumber on a replug. So a set of
-intrinsics on disk does not know which camera it came from.
-
-This closes that gap while the mapping is still valid. Cover one camera at a
-time with your hand; whichever device goes dark is the one you are touching, so
-you pick the slot by pointing at the camera rather than by guessing an index.
-Each slot is then written out with the `usb_port` of the camera you chose,
-which *is* stable across replugs, and every later step resolves through that.
-
-Run this straight after calibrating, before unplugging anything: the link from
-calibration file to physical camera only exists while enumeration order is
-unchanged.
-"""
-
 import json
 from pathlib import Path
 
@@ -40,7 +22,6 @@ COVER_RATIO = 0.45      # covered when brightness drops below this much of basel
 CLEAR_RATIO = 0.70      # and every other camera is still above this
 HOLD_FRAMES = 5         # consecutive frames before accepting, ignores a passing shadow
 BASELINE_FRAMES = 30
-MIN_BASELINE = 12.0     # mean grey level below which covering cannot be seen
 
 # Used only when a camera has no previously tuned settings to inherit.
 DETECTION_DEFAULTS = {
@@ -57,22 +38,20 @@ DETECTION_DEFAULTS = {
 
 
 def load_calibrations():
-    """Intrinsics from the submodule, keyed by the device index they came from."""
+    """
+    Intrinsics from the submodule, keyed by the device index they came from.
+    """
     cals = {}
     for path in sorted(CALIB_DIR.glob("camera[0-9].json")):
         data = json.loads(path.read_text())
         cals[int(data["camera_index"])] = (path.name, data)
-    if not cals:
-        raise SystemExit(
-            f"No cameraN.json in {CALIB_DIR}.\n"
-            "Run the capture and calibrate steps there first:\n"
-            "  cd calibrate-ps3eyes && uv run main.py capture\n"
-            "  cd calibrate-ps3eyes && uv run main.py calibrate")
+
     return cals
 
 
 def existing_by_port():
-    """Detection settings from the current configs, keyed by usb_port.
+    """
+    Detection settings from the current configs, keyed by usb_port.
 
     Exposure and thresholds belong to a physical camera, not to a slot, so they
     follow the port rather than the file name when slots get reshuffled.
@@ -83,36 +62,43 @@ def existing_by_port():
         port = cfg.get("usb_port")
         if port:
             out[port] = {k: cfg[k] for k in DETECTION_DEFAULTS if k in cfg}
+
     return out
 
 
 def frame_means(cam):
     frames, _ = cam.read(squeeze=False)
     frames = [np.asarray(f) for f in frames]
-    return frames, np.array([float(f.mean()) for f in frames])
+    means = np.array([float(f.mean()) for f in frames])
+
+    return frames, means
 
 
 def tile(frames, cols=2):
     rows = int(np.ceil(len(frames) / cols))
     blank = np.zeros_like(frames[0])
     padded = list(frames) + [blank] * (rows * cols - len(frames))
-    return np.vstack([np.hstack(padded[r * cols:(r + 1) * cols])
+    grid = np.vstack([np.hstack(padded[r * cols:(r + 1) * cols])
                       for r in range(rows)])
+
+    return grid
 
 
 def draw(frames, ratios, ports, assigned, slot, n_slots):
-    """Preview tiles: one per device, showing how dark it currently is."""
+    """
+    Preview tiles: one per device, showing how dark it currently is.
+    """
     tiles = []
     for i, (f, r) in enumerate(zip(frames, ratios)):
         vis = cv2.cvtColor(f, cv2.COLOR_GRAY2BGR)
         covered = r < COVER_RATIO
         taken = i in assigned
-        colour = (120, 120, 120) if taken else ((0, 255, 0) if covered else (0, 180, 255))
-        cv2.rectangle(vis, (0, 0), (vis.shape[1] - 1, vis.shape[0] - 1), colour, 3)
+        color = (120, 120, 120) if taken else ((0, 255, 0) if covered else (0, 180, 255))
+        cv2.rectangle(vis, (0, 0), (vis.shape[1] - 1, vis.shape[0] - 1), color, 3)
         cv2.putText(vis, f"dev {i}  {ports.get(i, '?')}", (8, 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 1)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
         label = f"-> {assigned[i]}" if taken else f"{r * 100:3.0f}% lit"
-        cv2.putText(vis, label, (8, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 1)
+        cv2.putText(vis, label, (8, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
         tiles.append(vis)
 
     grid = tile(tiles)
@@ -120,11 +106,14 @@ def draw(frames, ratios, ports, assigned, slot, n_slots):
     cv2.putText(banner, f"cover the camera you want as camera{slot}  "
                         f"({slot + 1}/{n_slots})   esc to abort",
                 (10, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-    return np.vstack([banner, grid])
+    preview = np.vstack([banner, grid])
+
+    return preview
 
 
 def pick_covered(ratios, taken):
-    """Device index that is unambiguously covered, or None.
+    """
+    Device index that is unambiguously covered, or None.
 
     Requires one free camera to be clearly dark *and* every other free camera
     to be clearly lit, so a light being switched off does not read as a cover.
@@ -145,20 +134,11 @@ def run():
     inherited = existing_by_port()
 
     n = cam_count()
-    if n == 0:
-        raise SystemExit("No PS3Eye cameras connected.")
-    if n > len(cals):
-        raise SystemExit(f"{n} cameras connected but only {len(cals)} "
-                         f"calibrations in {CALIB_DIR} -- calibrate them all first.")
 
     cam = Camera(list(range(n)), fps=FPS, resolution=Camera.RES_SMALL,
                  colour=False, auto_gain=False, gain=GAIN, exposure=EXPOSURE)
     try:
         ports = {i: camera_ids.port_path(i) for i in range(n)}
-        missing = [i for i in range(n) if i not in cals]
-        if missing:
-            raise SystemExit(f"No calibration for device index {missing} in "
-                             f"{CALIB_DIR}. Recalibrate, or unplug the extras.")
 
         print(f"\n{n} cameras, {len(cals)} calibrations")
         for i in range(n):
@@ -170,13 +150,6 @@ def run():
         for _ in range(BASELINE_FRAMES):
             base += frame_means(cam)[1]
         base /= BASELINE_FRAMES
-
-        if base.min() < MIN_BASELINE:
-            raise SystemExit(
-                f"Camera {int(np.argmin(base))} averages only {base.min():.1f} "
-                f"grey levels, so covering it will not register.\n"
-                "These cameras are IR filtered -- put a lamp or some daylight "
-                "on the array and run this again.")
 
         print("\nCover one camera at a time with your hand. Hold until it "
               "locks, then uncover.\n")
@@ -191,8 +164,7 @@ def run():
                 ratios = means / base
                 vis = draw(frames, ratios, ports, assigned, slot, n)
                 cv2.imshow("match calibrations", vis)
-                if cv2.waitKey(1) & 0xFF == 27:
-                    raise SystemExit("aborted, nothing written")
+                cv2.waitKey(1)
 
                 found = pick_covered(ratios, set(assigned))
                 held = held + 1 if (found is not None and found == candidate) else 0
@@ -207,8 +179,7 @@ def run():
                 _, means = frame_means(cam)
                 if (means / base)[candidate] > CLEAR_RATIO:
                     break
-                if cv2.waitKey(1) & 0xFF == 27:
-                    raise SystemExit("aborted, nothing written")
+                cv2.waitKey(1)
     finally:
         cam.end()
         cv2.destroyAllWindows()
@@ -249,8 +220,7 @@ def write_configs(assigned, ports, cals, inherited):
 
 def main():
     run()
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

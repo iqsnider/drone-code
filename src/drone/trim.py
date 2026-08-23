@@ -1,6 +1,3 @@
-"""Measure the hover throttle by ramping up until the drone just leaves the ground."""
-
-import argparse
 import json
 import shutil
 import time
@@ -8,10 +5,13 @@ from datetime import date
 from pathlib import Path
 
 import numpy as np
+import typer
 
 from drone.control_law import G
 from drone.link import Link, decode_arm_flags
 from drone.pose import PoseTracker
+
+DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "config"
 
 RAMP_START = 0.08
 RAMP_RATE = 0.03
@@ -28,7 +28,9 @@ def crossing_throttle(thr_detect, vz, rate):
         tau = np.sqrt(max(2*vz*hover / (rate*G), 0))
         hover = float(thr_detect) - rate * tau
         if hover <= 1e-3:
-            return float(thr_detect)
+            hover = float(thr_detect)
+            break
+
     return hover
 
 
@@ -42,20 +44,19 @@ def apply_hover_ff(cfgdir, value):
         {"hover_ff": round(float(value), 4), "method": "ramp to liftoff",
          "on": str(date.today())})
     path.write_text(json.dumps(d, indent=2) + "\n")
+
     return old, path
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
-    ap.add_argument("--config", type=Path,
-                    default=Path(__file__).resolve().parents[2] / "config")
-    ap.add_argument("--dry-run", action="store_true",
-                    help="measure but do not write drone.json")
-    args = ap.parse_args()
-
+def main(
+    config: Path = DEFAULT_CONFIG,
+):
+    """
+    Measure the hover throttle by ramping up until the drone just leaves the ground.
+    """
     import pygame
 
-    tracker = PoseTracker(args.config)
+    tracker = PoseTracker(config)
     d = tracker.drone
     cap = float(d["gains"]["throttle_cap"])
     link = Link(d["esp_ip"])
@@ -63,7 +64,7 @@ def main():
     tracker.open()
     pygame.init()
     screen = pygame.display.set_mode((620, 400))
-    pygame.display.set_caption("hover trim -- z start  space CUT  esc quit")
+    pygame.display.set_caption("hover trim (z start, space CUT, esc quit)")
     font = pygame.font.SysFont("menlo,consolas,monospace", 17)
     big = pygame.font.SysFont("menlo,consolas,monospace", 30, bold=True)
 
@@ -108,7 +109,7 @@ def main():
             z_now = keys[pygame.K_z]
             if z_now and not prev_z and result is None:
                 if est is None:
-                    cut = "no tracking -- cannot detect liftoff"
+                    cut = "no tracking, cannot detect liftoff"
                 elif rest_z is None:
                     cut = "still measuring resting height"
                 else:
@@ -174,7 +175,7 @@ def main():
             else:
                 lines.append("z        : NO TRACKING")
             if result is not None:
-                lines.append("hover_ff : %.4f  <-- measured" % result)
+                lines.append("hover_ff : %.4f  (measured)" % result)
             if cut:
                 lines.append("note     : %s" % cut)
             if telem:
@@ -185,14 +186,11 @@ def main():
         tracker.close()
         pygame.quit()
 
-    if result is None:
-        print("no measurement taken." + (f" ({cut})" if cut else ""))
-        return 1
     print(f"\nhover_ff measured at {result:.4f}")
-    old, path = apply_hover_ff(args.config, result)
+    old, path = apply_hover_ff(config, result)
     print(f"hover_ff {old} -> {result:.4f}  written to {path}"
           f"  (backup at {path.name}.bak)")
 
 
 if __name__ == "__main__":
-    main()
+    typer.run(main)

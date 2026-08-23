@@ -1,9 +1,9 @@
 import ctypes
 import json
-import sys
 from pathlib import Path
 
 import pseyepy
+import typer
 from pseyepy import Camera, cam_count
 
 IDENT_MAX = 64
@@ -12,11 +12,12 @@ IDENT_MAX = 64
 def camera_files(cfgdir):
     """
     The camera configs present in cfgdir, in slot order: camera0.json first.
-
-    This is the single source of truth for how many cameras the rig has --
+    This is the single source of truth for how many cameras the rig has;
     drop in a camera4.json and everything downstream picks it up.
     """
-    return sorted(p.name for p in Path(cfgdir).glob("camera[0-9].json"))
+    names = sorted(p.name for p in Path(cfgdir).glob("camera[0-9].json"))
+
+    return names
 
 
 _lib_cache = None
@@ -46,7 +47,9 @@ def port_path(index):
     buf = ctypes.create_string_buffer(IDENT_MAX)
     if lib.ps3eye_get_unique_identifier(int(index), buf, IDENT_MAX) != 0:
         return None
-    return buf.value.decode(errors="replace") or None
+    ident = buf.value.decode(errors="replace") or None
+
+    return ident
 
 
 def probe_ports():
@@ -72,8 +75,8 @@ def resolve_indices(cam_cfg, verbose=True):
     if not any(wanted):
         if verbose:
             print("camera identity: no usb_port recorded, trusting index "
-                  "fields (run `uv run python -m calibration.camera_ids "
-                  "--record` to pin them)")
+                  "fields (run uv run python -m calibration.camera_ids "
+                  "--record to pin them)")
         return fallback
 
     found = probe_ports()
@@ -131,7 +134,7 @@ def report(cfgdir):
         rec = cfg.get("usb_port")
         if rec is None:
             print(f"  {name}: no usb_port recorded, index field says "
-                  f"{cfg['index']}  -- WILL SWAP")
+                  f"{cfg['index']}  WILL SWAP")
         elif rec in found:
             i = found[rec]
             stale = "" if i == cfg.get("index") else \
@@ -140,7 +143,7 @@ def report(cfgdir):
         else:
             print(f"  {name}: USB port {rec} -> NOT CONNECTED")
     if not all(c.get("usb_port") for c in cfgs):
-        print("\nRun `uv run python -m calibration.camera_ids --record` to pin the mapping.")
+        print("\nRun uv run python -m calibration.camera_ids --record to pin the mapping.")
 
 
 def record(cfgdir, no_preview=False):
@@ -149,9 +152,6 @@ def record(cfgdir, no_preview=False):
 
     found = probe_ports()
     by_index = {i: p for p, i in found.items()}
-    if len(by_index) != len(names):
-        raise SystemExit(f"{len(names)} camera configs but {len(by_index)} "
-                         f"cameras connected -- plug them all in first")
 
     order = [int(c["index"]) for c in cfgs]
     if sorted(order) != sorted(by_index):
@@ -191,14 +191,14 @@ def record(cfgdir, no_preview=False):
                 if k in (13, 10):                     # enter
                     break
                 if k == 27:                           # esc
-                    raise KeyboardInterrupt("cancelled, nothing written")
+                    raise KeyboardInterrupt("canceled, nothing written")
                 if ord("0") <= k <= ord("9"):
                     slot = k - ord("0")
                     if slot >= len(names):
                         continue
                     if sel is None:
                         sel = slot
-                        print(f"slot {slot} ({names[slot]}) selected -- press "
+                        print(f"slot {slot} ({names[slot]}) selected, press "
                               f"another slot number to swap")
                     else:
                         order[sel], order[slot] = order[slot], order[sel]
@@ -219,13 +219,19 @@ def record(cfgdir, no_preview=False):
           "of enumeration order, as long as they stay in those sockets.")
 
 
-def main():
+def main(
+    do_record: bool = typer.Option(False, "--record", help="pin usb_port identities for the connected cameras"),
+    no_preview: bool = typer.Option(False, "--no-preview", help="bind by index fields, unverified"),
+):
+    """
+    Report or record which USB port each configured camera is plugged into.
+    """
     cfgdir = _find_config_dir()
-    if "--record" in sys.argv:
-        record(cfgdir, no_preview="--no-preview" in sys.argv)
+    if do_record:
+        record(cfgdir, no_preview=no_preview)
     else:
         report(cfgdir)
 
 
 if __name__ == "__main__":
-    main()
+    typer.run(main)

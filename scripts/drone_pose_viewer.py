@@ -1,6 +1,3 @@
-"""Live browser view of the tracked drone pose, raw and EKF, over WebSocket."""
-
-import argparse
 import base64
 import hashlib
 import json
@@ -10,7 +7,11 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import typer
+
 from drone.pose import PoseTracker
+
+DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "config"
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -29,7 +30,9 @@ def ws_frame(payload):
         head = struct.pack("!BBH", 0x81, 126, n)
     else:
         head = struct.pack("!BBQ", 0x81, 127, n)
-    return head + payload
+    frame = head + payload
+
+    return frame
 
 
 PAGE = """<!doctype html>
@@ -261,7 +264,7 @@ function render() {
       `      fit  rmsd ${(raw.rmsd*1000).toFixed(1)} mm   reproj ${raw.reproj.toFixed(2)} px` +
       `   from cam ${raw.used.join(",")}` +
       (raw.ok ? "" : "   <- rejected, LED triangle does not fit") + "\\n"
-    : "raw   no pose -- need 3 blobs in at least 2 cameras\\n";
+    : "raw   no pose, need 3 blobs in at least 2 cameras\\n";
   s += "\\n";
   s += est
     ? `EKF   pos  ${f(est.pos[0])} ${f(est.pos[1])} ${f(est.pos[2])} m` +
@@ -271,7 +274,7 @@ function render() {
       `/${(est.pos_std[2]*1000).toFixed(1)} mm\\n` +
       `      upd  accepted ${est.accepted}  rejected ${est.rejected}` +
       (est.coasting ? `   <- coasting ${(est.age*1000).toFixed(0)} ms` : "")
-    : "EKF   not initialized -- waiting for a trusted raw pose";
+    : "EKF   not initialized, waiting for a trusted raw pose";
   el_.textContent = s;
 }
 
@@ -314,7 +317,7 @@ class Handler(BaseHTTPRequestHandler):
             b"Sec-WebSocket-Accept: " + accept.encode() + b"\r\n\r\n")
         self.wfile.flush()
 
-        period = 1.0 / self.server.send_hz
+        period = 1 / self.server.send_hz
         while True:
             with _lock:
                 payload = json.dumps(_latest).encode()
@@ -330,25 +333,23 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
-    ap.add_argument("--config", type=Path,
-                    default=Path(__file__).resolve().parents[1] / "config")
-    ap.add_argument("--host", default="127.0.0.1",
-                    help="use 0.0.0.0 to view from another machine")
-    ap.add_argument("--port", type=int, default=8000)
-    ap.add_argument("--send-hz", type=float, default=30.0,
-                    help="WebSocket push rate")
-    args = ap.parse_args()
-
-    tracker = PoseTracker(args.config, preview=True)
+def main(
+    config: Path = DEFAULT_CONFIG,
+    host: str = typer.Option("127.0.0.1", help="use 0.0.0.0 to view from another machine"),
+    port: int = 8000,
+    send_hz: float = typer.Option(30, "--send-hz", help="WebSocket push rate"),
+):
+    """
+    Live browser view of the tracked drone pose, raw and EKF, over WebSocket.
+    """
+    tracker = PoseTracker(config, preview=True)
     tracker.open()
 
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    server = ThreadingHTTPServer((host, port), Handler)
     server.daemon_threads = True
-    server.send_hz = args.send_hz
+    server.send_hz = send_hz
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    print(f"viewer on http://{args.host}:{args.port}   (ctrl-c to stop)")
+    print(f"viewer on http://{host}:{port}   (ctrl-c to stop)")
 
     try:
         while True:
@@ -361,8 +362,7 @@ def main():
     finally:
         server.shutdown()
         tracker.close()
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    typer.run(main)

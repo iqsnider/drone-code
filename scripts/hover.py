@@ -1,50 +1,47 @@
-"""LQR hover: hold the drone at a setpoint using the camera rig for feedback."""
-
-import argparse
-import json
 import time
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
+import typer
 
 from drone.pose import PoseTracker
 from drone.control_law import LQRHover
 from drone.link import Link, decode_arm_flags
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
-    ap.add_argument("--config", type=Path,
-                    default=Path(__file__).resolve().parents[1] / "config")
-    ap.add_argument("--dry-run", action="store_true",
-                    help="run the whole loop but never transmit")
-    ap.add_argument("--height", type=float, default=None,
-                    help="override hover height in meters")
-    args = ap.parse_args()
+DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "config"
 
+def main(
+    config: Path = DEFAULT_CONFIG,
+    height: Optional[float] = typer.Option(None, "--height", help="override hover height in meters"),
+):
+    """
+    LQR hover: hold the drone at a setpoint using the camera rig for feedback.
+    """
     import pygame
 
-    tracker = PoseTracker(args.config)
+    tracker = PoseTracker(config)
     d = tracker.drone
     ctl = d["control"]
 
     target = np.array(d["setpoint"], float)
-    if args.height is not None:
-        target[2] = args.height
-    dt = 1.0 / float(tracker.cam_cfg[0]["fps"])
+    if height is not None:
+        target[2] = height
+    dt = 1 / float(tracker.cam_cfg[0]["fps"])
     controller = LQRHover(d, dt)
-    link = Link(d["esp_ip"], send=not args.dry_run)
+    link = Link(d["esp_ip"])
 
     tracker.open()
     pygame.init()
     screen = pygame.display.set_mode((620, 470))
-    pygame.display.set_caption("LQR hover -- z arm  e engage  space CUT  esc quit")
+    pygame.display.set_caption("LQR hover (z arm, e engage, space CUT, esc quit)")
     font = pygame.font.SysFont("menlo,consolas,monospace", 17)
     big = pygame.font.SysFont("menlo,consolas,monospace", 30, bold=True)
 
     armed = engaged = False
     prev_z = prev_e = False
-    sp = target.copy()          # ramped setpoint, moves toward `target`
-    yaw_sp = 0.0
+    sp = target.copy()          # ramped setpoint, moves toward target
+    yaw_sp = 0
     loss_t0 = None
     last_thr = controller.hover_ff      # what the loss ramp eases down from
     last = time.perf_counter()
@@ -79,7 +76,7 @@ def main():
             est = out["est"]
             tracking = est is not None and est["age"] < ctl["loss_grace_s"]
 
-            # --- edge-triggered keys ---
+            # edge-triggered keys
             z_now = keys[pygame.K_z]
             if z_now and not prev_z:
                 armed = not armed
@@ -127,26 +124,24 @@ def main():
                     if loss_t0 is None:
                         loss_t0 = now
                     frac = (now - loss_t0) / ctl["loss_ramp_s"]
-                    if frac >= 1.0:
+                    if frac >= 1:
                         armed = engaged = False
                         cut_reason = "TRACKING LOST"
                     else:
                         # ease off from whatever was last commanded, so losing
                         # tracking mid-climb is not itself a throttle step
-                        throttle = last_thr * (1.0 - frac)
+                        throttle = last_thr * (1 - frac)
 
             link.send(armed, roll, pitch, yaw_cmd, throttle)
             telem = link.poll()
 
-            # --- HUD ---
+            # HUD
             if engaged:
                 banner, color = "ENGAGED", (40, 200, 90)
             elif armed:
                 banner, color = "ARMED (idle)", (230, 180, 40)
             else:
                 banner, color = "DISARMED", (150, 150, 150)
-            if args.dry_run:
-                banner += "  [DRY RUN]"
 
             lines = []
             if est:
@@ -172,17 +167,16 @@ def main():
                 lines.append("last cut : %s" % cut_reason)
             if telem:
                 lines.append("FC       : state %d  loop %d us  loss %.1f%%"
-                             % (telem[1], telem[6], telem[8] / 10.0))
+                             % (telem[1], telem[6], telem[8] / 10))
                 lines.append("FC arming: %s" % decode_arm_flags(telem[7]))
-            elif not args.dry_run:
-                lines.append("FC       : no telemetry -- check wifi to the ESP32")
+            else:
+                lines.append("FC       : no telemetry, check wifi to the ESP32")
             hud(lines, banner, color)
     finally:
         link.disarm_burst()
         tracker.close()
         pygame.quit()
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    typer.run(main)
